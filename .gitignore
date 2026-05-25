@@ -9,3 +9,5 @@ data/workspaces/
 *.xls
 *.tsbuildinfo
 *.log
+.vercel/
+supabase/.temp/

@@ -8,5 +8,7 @@ export const config = {
   openaiModel: process.env.OPENAI_MODEL || "gpt-5.5",
   openAlexMailto: process.env.OPENALEX_MAILTO || "",
   host: process.env.HOST || "127.0.0.1",
-  openaiBaseUrl: process.env.OPENAI_BASE_URL || ""
+  openaiBaseUrl: process.env.OPENAI_BASE_URL || "",
+  supabaseUrl: process.env.SUPABASE_URL || "",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || ""
 };

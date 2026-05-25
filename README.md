@@ -4,6 +4,8 @@ AI4S Knowledge Codex is a topic-to-expert research workbench. It turns a scienti
 
 The MVP is intentionally model-free: it does not train a new foundation model. It focuses on paper ingestion, structured metadata, retrieval, evidence tables, research maps, and Codex-ready context packages.
 
+Live demo: https://nerd-ai4s.vercel.app
+
 ## What It Does
 
 - Starts from a user-entered AI4S topic.
@@ -13,6 +15,8 @@ The MVP is intentionally model-free: it does not train a new foundation model. I
 - Uses OpenAI's API when `OPENAI_API_KEY` is configured.
 - Falls back to local retrieval when no API key is present.
 - Generates files such as research briefs, materials analyses, graph JSON, and facts CSV.
+- Supports shareable workspace URLs with `?workspace=<workspace_id>`.
+- Uses local JSON storage by default and can switch to Supabase for hosted persistence.
 
 ## Run Locally
 
@@ -49,6 +53,21 @@ OPENAI_BASE_URL=https://api.tokenrouter.com/v1
 OPENAI_MODEL=your_router_model_id
 ```
 
+## Optional Supabase Storage
+
+Local development writes workspaces to `data/workspaces` and files to `outputs`.
+
+For hosted deployment, create the tables in `supabase/schema.sql`, then set:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+
+When both values are present, the backend stores workspaces and generated artifacts in Supabase instead of the local filesystem.
+
+Keep the service role key server-side only. Do not expose it as a frontend `VITE_` variable.
+
 ## Build
 
 ```bash
@@ -57,6 +76,18 @@ npm start
 ```
 
 `npm start` serves the built frontend and backend from one Express server.
+
+## Deployment Shape
+
+For a production demo:
+
+- Frontend: Vercel static build from `npm run build`.
+- Backend on Vercel: `api/index.js` exports the Express app for `/api/*` serverless routes.
+- Backend on a Node host: `npm start` serves the built frontend and Express API together.
+- Persistence: Supabase tables from `supabase/schema.sql`.
+- Secrets: `OPENAI_API_KEY` or router key, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
+
+The included `vercel.json` routes `/api/*` to the serverless Express entrypoint and all other paths to the Vite app.
 
 ## API
 
