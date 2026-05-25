@@ -4,7 +4,10 @@ import { contextForModel, graphToMermaid, makeFallbackAnswer, retrieve, summariz
 
 function getClient() {
   if (!config.openaiApiKey) return null;
-  return new OpenAI({ apiKey: config.openaiApiKey });
+  return new OpenAI({
+    apiKey: config.openaiApiKey,
+    baseURL: config.openaiBaseUrl || undefined
+  });
 }
 
 function responseText(response) {

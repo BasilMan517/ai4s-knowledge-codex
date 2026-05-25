@@ -27,7 +27,8 @@ app.get("/api/health", (_request, response) => {
   response.json({
     ok: true,
     openaiConfigured: Boolean(config.openaiApiKey),
-    model: config.openaiModel
+    model: config.openaiModel,
+    baseUrlConfigured: Boolean(config.openaiBaseUrl)
   });
 });
 

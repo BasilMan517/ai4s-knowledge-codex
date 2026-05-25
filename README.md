@@ -35,10 +35,19 @@ Set:
 
 ```bash
 OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=gpt-5.3-codex
+OPENAI_BASE_URL=
+OPENAI_MODEL=gpt-5.5
 ```
 
 Without a key, the app still builds knowledge bases and generates fallback reports from local retrieval.
+
+For OpenAI-compatible routers such as TokenRouter, set:
+
+```bash
+TOKENROUTER_API_KEY=your_router_key_here
+OPENAI_BASE_URL=https://api.tokenrouter.com/v1
+OPENAI_MODEL=your_router_model_id
+```
 
 ## Build
 
