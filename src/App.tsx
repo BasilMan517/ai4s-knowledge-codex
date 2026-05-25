@@ -92,13 +92,14 @@ function TopBar({
             <BrainCircuit size={20} />
           </div>
           <div>
-            <strong>AI4S Knowledge Codex</strong>
-            <span>field intelligence workspace</span>
+            <strong>NERD</strong>
+            <span>AI4S model workspace</span>
           </div>
         </div>
 
         <div className={`healthBadge ${health?.openaiConfigured ? "ready" : "fallback"}`}>
-          {health?.openaiConfigured ? "Model online" : "Local mode"}
+          <span className="statusDot" />
+          {health?.openaiConfigured ? "Online" : "Local"}
           <span>{health?.model || "checking"}</span>
         </div>
       </div>
@@ -109,7 +110,7 @@ function TopBar({
           <input
             value={topic}
             onChange={(event) => setTopic(event.target.value)}
-            placeholder="输入材料/科学领域 topic"
+            placeholder="输入一个科学领域，例如 solid-state electrolyte discovery"
             aria-label="Scientific topic"
           />
         </label>
@@ -141,7 +142,7 @@ function TopBar({
 
         <button className="iconButton primary" onClick={onBuild} disabled={loading || !topic.trim()}>
           {loading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-          <span>{mode === "building" ? "Building" : mode === "loadingWorkspace" ? "Loading" : "Generate"}</span>
+          <span>{mode === "building" ? "Building" : mode === "loadingWorkspace" ? "Loading" : "Generate Model"}</span>
         </button>
       </div>
     </header>
@@ -169,30 +170,30 @@ function ProcessFlow({
   const steps = [
     {
       icon: <Search size={18} />,
-      title: "论文搜索",
+      title: "Search",
       value: hasWorkspace ? `${workspace?.papers.length ?? 0} papers` : isBuilding ? "searching" : "waiting",
-      detail: hasWorkspace ? "OpenAlex corpus" : "topic to corpus",
+      detail: hasWorkspace ? "literature corpus" : "field to corpus",
       state: hasWorkspace || activePhase > 0 ? "done" : activePhase === 0 ? "active" : "idle"
     },
     {
       icon: <Layers size={18} />,
-      title: "知识库建立",
+      title: "Structure",
       value: hasWorkspace ? `${workspace?.facts.length ?? 0} facts` : isBuilding && activePhase === 1 ? "extracting" : "waiting",
-      detail: hasWorkspace ? `${workspace?.entities.length ?? 0} entities, ${workspace?.chunks?.length ?? 0} chunks` : "entities, facts, evidence",
+      detail: hasWorkspace ? `${workspace?.entities.length ?? 0} entities` : "facts and entities",
       state: hasWorkspace || activePhase > 1 ? "done" : activePhase === 1 ? "active" : "idle"
     },
     {
       icon: <Network size={18} />,
-      title: "图谱生成",
+      title: "Connect",
       value: hasWorkspace ? `${graph?.edges.length ?? 0} edges` : isBuilding && activePhase === 2 ? "linking" : "waiting",
-      detail: hasWorkspace ? `${graph?.nodes.length ?? 0} nodes` : "scientific relations",
+      detail: hasWorkspace ? `${graph?.nodes.length ?? 0} nodes` : "knowledge graph",
       state: hasWorkspace || activePhase > 2 ? "done" : activePhase === 2 ? "active" : "idle"
     },
     {
       icon: <BrainCircuit size={18} />,
-      title: "模型上下文",
+      title: "Activate",
       value: hasWorkspace ? "ready" : isBuilding && activePhase === 3 ? "assembling" : "waiting",
-      detail: "grounded Codex layer",
+      detail: "expert workspace",
       state: hasWorkspace ? "done" : activePhase === 3 ? "active" : "idle"
     }
   ];
@@ -206,7 +207,7 @@ function ProcessFlow({
         </div>
         <div className={`modelState ${hasWorkspace ? "ready" : isBuilding ? "active" : ""}`}>
           <BrainCircuit size={18} />
-          <span>{hasWorkspace ? "Model workspace ready" : isBuilding ? "Building model workspace" : "Awaiting topic"}</span>
+          <span>{hasWorkspace ? "Workspace ready" : isBuilding ? "Building workspace" : hasTopic ? "Ready to build" : "Awaiting topic"}</span>
         </div>
       </div>
 
@@ -247,24 +248,24 @@ function BuildTrace({
   const graph = workspace?.graph;
   const rows = [
     {
-      label: "Corpus search",
-      value: workspace ? `${workspace.papers.length} papers indexed` : "OpenAlex query queue",
-      detail: workspace?.papers[0]?.title || "ranking papers by relevance, year, citations"
+      label: "Corpus",
+      value: workspace ? `${workspace.papers.length} papers` : "queued",
+      detail: workspace?.papers[0]?.title || "relevance-ranked papers"
     },
     {
-      label: "Knowledge memory",
-      value: workspace ? `${workspace.facts.length} facts, ${workspace.entities.length} entities` : "fact extraction queue",
-      detail: workspace?.facts[0] ? `${workspace.facts[0].subject} -> ${workspace.facts[0].object}` : "extracting material systems, methods, properties"
+      label: "Memory",
+      value: workspace ? `${workspace.facts.length} facts` : "queued",
+      detail: workspace?.facts[0] ? `${workspace.facts[0].subject} -> ${workspace.facts[0].object}` : "materials, methods, properties"
     },
     {
-      label: "Graph compiler",
-      value: workspace ? `${graph?.nodes.length ?? 0} nodes, ${graph?.edges.length ?? 0} edges` : "relation linking queue",
-      detail: workspace?.graph?.edges[0]?.label || "connecting evidence into a navigable field graph"
+      label: "Graph",
+      value: workspace ? `${graph?.nodes.length ?? 0} nodes` : "queued",
+      detail: workspace?.graph?.edges[0]?.label || "relation compiler"
     },
     {
-      label: "AI4S Codex layer",
-      value: workspace ? `${artifacts.length} generated files` : "agent context queue",
-      detail: workspace ? "chat, files, graph JSON, facts CSV stay available" : "packing retrieval context for grounded chat and deliverables"
+      label: "Codex",
+      value: workspace ? `${artifacts.length} files` : "queued",
+      detail: workspace ? "chat and deliverables" : "grounded context"
     }
   ];
 
@@ -272,7 +273,7 @@ function BuildTrace({
     <div className="buildTrace">
       <div className="traceHeader">
         <MessageSquareText size={16} />
-        <span>{workspace ? "Generated model workspace" : isBuilding ? "Live build trace" : "Build trace"}</span>
+        <span>{workspace ? "Model assets" : isBuilding ? "Live build" : "Build preview"}</span>
       </div>
       {rows.map((row, index) => {
         const state = workspace || activePhase > index ? "done" : activePhase === index ? "active" : "idle";
@@ -351,6 +352,21 @@ function ResearchMap({ workspace }: { workspace: Workspace }) {
   );
 }
 
+function CompactFacts({ workspace }: { workspace: Workspace }) {
+  const facts = workspace.facts.slice(0, 6);
+  return (
+    <div className="compactFacts">
+      {facts.map((fact) => (
+        <article key={fact.id}>
+          <span>{fact.predicate.replace(/_/g, " ")}</span>
+          <strong>{fact.object}</strong>
+          <p>{fact.subject}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function FactMatrix({ workspace }: { workspace: Workspace }) {
   return (
     <div className="factMatrix">
@@ -415,7 +431,7 @@ function GraphPreview({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[]
     return (
       <div className="graphPreview empty">
         <Network size={28} />
-        <span>Graph appears after build</span>
+        <span>Knowledge graph</span>
       </div>
     );
   }
@@ -450,7 +466,7 @@ function KnowledgeStage({ workspace }: { workspace: Workspace }) {
     <section className="knowledgeStage">
       <div className="stageHeader">
         <div>
-          <span className="eyebrow">Private AI4S Model Workspace</span>
+          <span className="eyebrow">Generated Model</span>
           <h1>{workspace.topic}</h1>
         </div>
         <div className="metricPills">
@@ -480,30 +496,34 @@ function KnowledgeStage({ workspace }: { workspace: Workspace }) {
       </div>
 
       <div className="stageGrid">
-        <div>
-          <div className="sectionTitle">
-            <GitBranch size={17} />
-            <h2>Research map</h2>
-          </div>
-          <ResearchMap workspace={workspace} />
-        </div>
-        <div>
+        <section>
           <div className="sectionTitle">
             <Network size={17} />
-            <h2>Graph preview</h2>
+            <h2>Knowledge graph</h2>
           </div>
           <GraphPreview nodes={graph?.nodes || []} edges={graph?.edges || []} />
-        </div>
+        </section>
+        <section>
+          <div className="sectionTitle">
+            <Database size={17} />
+            <h2>Evidence memory</h2>
+          </div>
+          <CompactFacts workspace={workspace} />
+        </section>
       </div>
 
-      <div className="kbShowcase">
+      <details className="kbShowcase">
+        <summary>
+          <Database size={17} />
+          <span>Explore structured knowledge</span>
+        </summary>
         <div className="sectionTitle">
           <Database size={17} />
           <h2>Knowledge base</h2>
         </div>
         <FactMatrix workspace={workspace} />
         <EntityCloud workspace={workspace} />
-      </div>
+      </details>
     </section>
   );
 }
@@ -535,7 +555,7 @@ function ChatPanel({
     <main className="chatPanel">
       <div className="panelHeader">
         <div>
-          <span className="eyebrow">Codex Agent</span>
+          <span className="eyebrow">Ask the Model</span>
           <h2>Expert chat</h2>
         </div>
         <MessageSquareText size={20} />
@@ -574,7 +594,7 @@ function ChatPanel({
       </div>
 
       <div className="evidenceStrip">
-        <strong>Evidence memory</strong>
+        <strong>Grounding</strong>
         {(evidence.length ? evidence : workspace?.chunks?.slice(0, 3) || []).slice(0, 3).map((item) => (
           <article key={item.id}>
             <span>{item.kind}</span>
@@ -611,7 +631,7 @@ function ArtifactPanel({
     <section className="artifactPanel">
       <div className="panelHeader compact">
         <div>
-          <span className="eyebrow">Model Outputs</span>
+          <span className="eyebrow">Export</span>
           <h2>Files</h2>
         </div>
         <Download size={20} />
@@ -768,7 +788,8 @@ function EmptyState({ onBuild, loading }: { onBuild: () => void; loading: boolea
     <section className="emptyHero">
       <div className="emptyCopy">
         <span className="eyebrow">AI4S Knowledge Infrastructure</span>
-        <h1>输入一个领域，生成专属 AI4S 模型工作台</h1>
+        <h1>从一个研究领域，生成可对话的材料发现模型</h1>
+        <p>自动收集论文、整理 evidence、编译知识图谱，并交给 Codex 作为领域工作台。</p>
         <div className="emptyFlow">
           <span>论文搜索</span>
           <span>知识库</span>
@@ -782,30 +803,11 @@ function EmptyState({ onBuild, loading }: { onBuild: () => void; loading: boolea
       </div>
 
       <div className="demoCanvas" aria-hidden="true">
-        <div className="demoHeader">
-          <span />
-          <span />
-          <span />
+        <GraphPreview nodes={[]} edges={[]} />
+        <div className="demoMetric">
+          <span>Private model workspace</span>
+          <strong>Corpus + Graph + Codex</strong>
         </div>
-        <div className="demoGrid">
-          <article>
-            <strong>45</strong>
-            <small>papers</small>
-          </article>
-          <article>
-            <strong>77</strong>
-            <small>facts</small>
-          </article>
-          <article>
-            <strong>142</strong>
-            <small>graph nodes</small>
-          </article>
-        </div>
-        <div className="demoGraph">
-          <Network size={48} />
-        </div>
-        <div className="demoLine" />
-        <div className="demoLine short" />
       </div>
     </section>
   );
@@ -984,12 +986,6 @@ export function App() {
       {error && <div className="errorBanner">{error}</div>}
 
       <ProcessFlow topic={topic} workspace={workspace} artifacts={artifacts} mode={workMode} buildTick={buildTick} />
-      <WorkspaceHistory
-        workspaces={workspaceSummaries}
-        activeId={workspace?.id}
-        loading={loading}
-        onLoad={loadWorkspace}
-      />
 
       {!workspace ? (
         <EmptyState onBuild={buildKnowledgeBase} loading={loading} />
@@ -1016,6 +1012,12 @@ export function App() {
           />
 
           <DetailsShelf workspace={workspace} />
+          <WorkspaceHistory
+            workspaces={workspaceSummaries}
+            activeId={workspace?.id}
+            loading={loading}
+            onLoad={loadWorkspace}
+          />
         </>
       )}
     </div>
