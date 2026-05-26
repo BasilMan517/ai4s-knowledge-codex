@@ -84,13 +84,17 @@ async function searchOneQuery(query, options = {}) {
 
   const url = `https://api.openalex.org/works?${params.toString()}`;
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     const response = await fetch(url, {
       headers: {
         "User-Agent": config.openAlexMailto
           ? `ai4s-knowledge-codex mailto:${config.openAlexMailto}`
           : "ai4s-knowledge-codex"
-      }
+      },
+      signal: controller.signal
     });
+    clearTimeout(timer);
 
     if (!response.ok) {
       console.warn(`OpenAlex query "${query}" failed: ${response.status}`);
@@ -98,9 +102,11 @@ async function searchOneQuery(query, options = {}) {
     }
 
     const payload = await response.json();
-    return (payload.results || [])
+    const results = (payload.results || [])
       .map(mapWork)
       .filter((paper) => paper.title && (paper.abstract || paper.labels.length));
+    console.log(`OpenAlex "${query.slice(0, 50)}": ${results.length} papers`);
+    return results;
   } catch (err) {
     console.warn(`OpenAlex query "${query}" error:`, err.message);
     return [];

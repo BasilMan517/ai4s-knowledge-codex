@@ -49,21 +49,27 @@ export async function searchSemanticScholar(query, options = {}) {
   const url = `https://api.semanticscholar.org/graph/v1/paper/search?${params.toString()}`;
 
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
     const response = await fetch(url, {
-      headers: { "User-Agent": "ai4s-knowledge-codex" }
+      headers: { "User-Agent": "ai4s-knowledge-codex" },
+      signal: controller.signal
     });
+    clearTimeout(timer);
 
     if (!response.ok) {
-      console.warn(`Semantic Scholar search failed: ${response.status}`);
+      console.warn(`S2 search "${query.slice(0, 40)}" failed: ${response.status}`);
       return [];
     }
 
     const payload = await response.json();
-    return (payload.data || [])
+    const results = (payload.data || [])
       .map(mapPaper)
       .filter((p) => p.title && p.title !== "Untitled" && (p.abstract || p.labels.length));
+    console.log(`S2 "${query.slice(0, 50)}": ${results.length} papers`);
+    return results;
   } catch (err) {
-    console.warn("Semantic Scholar search error:", err.message);
+    console.warn(`S2 search "${query.slice(0, 40)}" error:`, err.message);
     return [];
   }
 }
