@@ -95,7 +95,7 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
     type: n.type,
     x: 0,
     y: 0,
-    r: n.type === "paper" ? 6 : Math.min(16, 9 + (n.count || 0) * 1.5)
+    r: n.type === "paper" ? 10 : Math.min(16, 9 + (n.count || 0) * 1.5)
   }));
 
   const edges = allEdges
@@ -333,10 +333,14 @@ function Process({
       zoomRef.current = zoomBehavior;
       svg.call(zoomBehavior);
       svg.on("dblclick.zoom", null);
-      svg.on("click.deselect", () => setSelectedId(null));
     }
 
     const g = svg.append("g").attr("class", "graph-content");
+    g.append("rect")
+      .attr("width", width * 4).attr("height", height * 4)
+      .attr("x", -width * 1.5).attr("y", -height * 1.5)
+      .attr("fill", "transparent")
+      .on("click", () => setSelectedId(null));
     const currentTransform = zoomTransform(svgEl);
     g.attr("transform", currentTransform.toString());
 
