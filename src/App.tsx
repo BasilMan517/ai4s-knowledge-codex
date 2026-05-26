@@ -328,6 +328,7 @@ function Process({
       zoomRef.current = zoomBehavior;
       svg.call(zoomBehavior);
       svg.on("dblclick.zoom", null);
+      svg.on("click.deselect", () => setSelectedId(null));
     }
 
     const g = svg.append("g").attr("class", "graph-content");
