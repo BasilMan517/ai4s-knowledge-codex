@@ -261,6 +261,8 @@ function Process({
   );
 
   const selected = rawNodes.find(n => n.id === selectedId) ?? null;
+  const selectedPaper = selected?.type === "paper" ? workspace?.papers.find(p => p.id === selected.id) : null;
+  const selectedEntity = selected && selected.type !== "paper" ? workspace?.entities.find(e => e.id === selected.id) : null;
 
   const citedNodeIds = useMemo(() => {
     if (citedPaperIds.size === 0) return new Set<string>();
@@ -794,34 +796,66 @@ function Process({
                 {selected && (
                   <div className="detail-panel">
                     <div className="detail-panel-header">
-                      <span className="detail-title">Node Details</span>
+                      <span className="detail-title">{selected.type === "paper" ? "Paper" : "Entity"}</span>
                       <span className="detail-badge" style={{ background: colors[selected.type] || "#888" }}>
                         {selected.type}
                       </span>
+                      <button className="detail-close" onClick={() => setSelectedId(null)}>✕</button>
                     </div>
                     <div className="detail-content">
-                      <div className="detail-row">
-                        <span className="detail-label">Name:</span>
-                        <span className="detail-value highlight">{selected.name}</span>
-                      </div>
-                      <div className="detail-row">
-                        <span className="detail-label">Edges:</span>
-                        <span className="detail-value">{rawEdges.filter(e => e.source === selected.id || e.target === selected.id).length} connections</span>
-                      </div>
-                      {selected.type !== "topic" && (
-                        <div className="detail-section">
-                          <span className="detail-label">Related:</span>
-                          <p className="detail-summary">
-                            {rawEdges
-                              .filter(e => e.source === selected.id || e.target === selected.id)
-                              .slice(0, 3)
-                              .map(e => {
-                                const otherId = e.source === selected.id ? e.target : e.source;
-                                const other = nodeMap.get(otherId);
-                                return other ? other.name : otherId;
-                              })
-                              .join(", ") || "No direct connections"}
-                          </p>
+                      {selectedPaper ? (
+                        <>
+                          <h3 className="detail-paper-title">{selectedPaper.title}</h3>
+                          {selectedPaper.authors && (
+                            <p className="detail-authors">{selectedPaper.authors}</p>
+                          )}
+                          <div className="detail-meta-row">
+                            {selectedPaper.year && <span className="detail-meta-tag">{selectedPaper.year}</span>}
+                            {selectedPaper.venue && <span className="detail-meta-tag">{selectedPaper.venue}</span>}
+                            {selectedPaper.citationCount != null && <span className="detail-meta-tag">🔗 {selectedPaper.citationCount} citations</span>}
+                            {selectedPaper.source && <span className="detail-meta-tag">{selectedPaper.source}</span>}
+                          </div>
+                          {selectedPaper.abstract && (
+                            <p className="detail-abstract">{selectedPaper.abstract.length > 400 ? selectedPaper.abstract.slice(0, 400) + "..." : selectedPaper.abstract}</p>
+                          )}
+                          {selectedPaper.labels.length > 0 && (
+                            <div className="detail-labels">
+                              {selectedPaper.labels.slice(0, 6).map(l => (
+                                <span key={l} className="detail-label-tag">{l}</span>
+                              ))}
+                            </div>
+                          )}
+                          {selectedPaper.url && (
+                            <a className="detail-link" href={selectedPaper.url} target="_blank" rel="noopener noreferrer">
+                              Open paper ↗
+                            </a>
+                          )}
+                        </>
+                      ) : selectedEntity ? (
+                        <>
+                          <h3 className="detail-paper-title">{selectedEntity.name}</h3>
+                          <div className="detail-meta-row">
+                            <span className="detail-meta-tag">{selectedEntity.type}</span>
+                            <span className="detail-meta-tag">{selectedEntity.paperIds.length} papers</span>
+                          </div>
+                          <div className="detail-section">
+                            <span className="detail-label">Related papers:</span>
+                            <ul className="detail-paper-list">
+                              {selectedEntity.paperIds.slice(0, 5).map(pid => {
+                                const p = workspace?.papers.find(pp => pp.id === pid);
+                                return p ? (
+                                  <li key={pid} className="detail-paper-item" onClick={() => setSelectedId(pid)}>
+                                    {p.title} {p.year ? `(${p.year})` : ""}
+                                  </li>
+                                ) : null;
+                              })}
+                            </ul>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="detail-row">
+                          <span className="detail-label">Name:</span>
+                          <span className="detail-value highlight">{selected.name}</span>
                         </div>
                       )}
                     </div>
