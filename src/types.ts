@@ -60,7 +60,8 @@ export type Cluster = {
 export type Workspace = {
   id?: string;
   topic: string;
-  status?: string;
+  status?: "building" | "ready" | "error";
+  progress?: { total: number; processed: number; phase?: string };
   papers: Paper[];
   chunks?: EvidenceChunk[];
   facts: Fact[];

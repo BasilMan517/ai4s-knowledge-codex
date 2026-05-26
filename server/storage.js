@@ -70,7 +70,10 @@ export async function saveWorkspace(workspace) {
     return;
   }
   await ensureStorage();
-  await fs.writeFile(getWorkspacePath(workspace.id), JSON.stringify(workspace, null, 2));
+  const target = getWorkspacePath(workspace.id);
+  const tmp = `${target}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(workspace, null, 2));
+  await fs.rename(tmp, target);
 }
 
 export async function loadWorkspace(workspaceId) {

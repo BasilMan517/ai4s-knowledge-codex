@@ -309,6 +309,36 @@ export function buildKnowledgeBase(topic, papers) {
   };
 }
 
+export function createEmptyWorkspace(topic, totalPapers = 0) {
+  const now = new Date().toISOString();
+  return {
+    id: `ws-${Date.now().toString(36)}`,
+    topic,
+    status: "building",
+    progress: { total: totalPapers, processed: 0, phase: "fetching" },
+    papers: [],
+    chunks: [],
+    entities: [],
+    facts: [],
+    graph: { nodes: [], edges: [] },
+    clusters: [],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+export function addPaperBatch(workspace, newPapers) {
+  workspace.papers.push(...newPapers);
+  workspace.chunks = chunkPapers(workspace.papers);
+  workspace.entities = deriveEntities(workspace.papers);
+  workspace.facts = deriveFacts(workspace.papers);
+  workspace.graph = buildGraph(workspace.papers, workspace.entities, workspace.facts);
+  workspace.clusters = clusterPapers(workspace.papers);
+  workspace.progress.processed = workspace.papers.length;
+  workspace.updatedAt = new Date().toISOString();
+  return workspace;
+}
+
 export function summarizeWorkspace(workspace) {
   return [
     `Topic: ${workspace.topic}`,

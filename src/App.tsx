@@ -96,15 +96,19 @@ function runForceLayout(
   inputNodes: LayoutNode[],
   inputEdges: { source: string; target: string; label: string }[],
   width: number,
-  height: number
+  height: number,
+  existingPositions?: Map<string, { x: number; y: number }>
 ): { nodes: LayoutNode[]; edges: { source: string; target: string; label: string }[] } {
   if (inputNodes.length === 0) return { nodes: [], edges: [] };
 
-  const simNodes: ForceNode[] = inputNodes.map(n => ({
-    ...n,
-    x: width / 2 + (Math.random() - 0.5) * width * 0.6,
-    y: height / 2 + (Math.random() - 0.5) * height * 0.6
-  }));
+  const simNodes: ForceNode[] = inputNodes.map(n => {
+    const prev = existingPositions?.get(n.id);
+    return {
+      ...n,
+      x: prev ? prev.x : width / 2 + (Math.random() - 0.5) * width * 0.6,
+      y: prev ? prev.y : height / 2 + (Math.random() - 0.5) * height * 0.6
+    };
+  });
 
   const nodeById = new Map(simNodes.map(n => [n.id, n]));
   const simEdges: ForceEdge[] = inputEdges
@@ -284,10 +288,12 @@ function Process({
   workspace,
   loading: wsLoading,
   topic,
+  onWorkspaceUpdate,
 }: {
   workspace: Workspace | null;
   loading: boolean;
   topic: string;
+  onWorkspaceUpdate: (ws: Workspace) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -299,6 +305,9 @@ function Process({
   const [nodePositions, setNodePositions] = useState<Map<string, { x: number; y: number }>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const layoutPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const seenNodeIdsRef = useRef<Set<string>>(new Set());
+  const prevNodeCountRef = useRef(0);
 
   const isEmpty = !workspace || (workspace.papers.length === 0 && workspace.entities.length === 0);
 
@@ -308,7 +317,13 @@ function Process({
   );
 
   const { nodes: forceNodes, edges: graphEdges } = useMemo(
-    () => runForceLayout(rawNodes, rawEdges, 840, 460),
+    () => {
+      const result = runForceLayout(rawNodes, rawEdges, 840, 460, layoutPositionsRef.current);
+      const posMap = new Map<string, { x: number; y: number }>();
+      for (const n of result.nodes) posMap.set(n.id, { x: n.x, y: n.y });
+      layoutPositionsRef.current = posMap;
+      return result;
+    },
     [rawNodes, rawEdges]
   );
 
@@ -321,22 +336,61 @@ function Process({
   }, [forceNodes, nodePositions]);
 
   useEffect(() => {
-    setVisibleCount(0);
-    setNodePositions(new Map());
-    if (graphNodes.length === 0) return;
-    let count = 0;
-    const total = graphNodes.length;
-    const interval = setInterval(() => {
-      count += Math.max(1, Math.floor(total / 20));
-      if (count >= total) {
-        setVisibleCount(total);
-        clearInterval(interval);
-      } else {
-        setVisibleCount(count);
-      }
-    }, 60);
-    return () => clearInterval(interval);
+    const currentCount = graphNodes.length;
+    const prevCount = prevNodeCountRef.current;
+    if (currentCount === 0) {
+      setVisibleCount(0);
+      prevNodeCountRef.current = 0;
+      return;
+    }
+    if (prevCount === 0) {
+      setVisibleCount(0);
+      setNodePositions(new Map());
+      let count = 0;
+      const interval = setInterval(() => {
+        count += Math.max(1, Math.floor(currentCount / 20));
+        if (count >= currentCount) {
+          setVisibleCount(currentCount);
+          clearInterval(interval);
+        } else {
+          setVisibleCount(count);
+        }
+      }, 60);
+      prevNodeCountRef.current = currentCount;
+      return () => clearInterval(interval);
+    }
+    if (currentCount > prevCount) {
+      setVisibleCount(prevCount);
+      let count = prevCount;
+      const newCount = currentCount - prevCount;
+      const interval = setInterval(() => {
+        count += Math.max(1, Math.floor(newCount / 10));
+        if (count >= currentCount) {
+          setVisibleCount(currentCount);
+          clearInterval(interval);
+        } else {
+          setVisibleCount(count);
+        }
+      }, 60);
+      prevNodeCountRef.current = currentCount;
+      return () => clearInterval(interval);
+    }
+    setVisibleCount(currentCount);
+    prevNodeCountRef.current = currentCount;
   }, [forceNodes.length]);
+
+  useEffect(() => {
+    if (!workspace?.id || workspace.status !== "building") return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/workspaces/${workspace.id}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.workspace) onWorkspaceUpdate(data.workspace);
+      } catch {}
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [workspace?.id, workspace?.status, onWorkspaceUpdate]);
 
   const selected = graphNodes.find((n) => n.id === selectedId) ?? null;
 
@@ -501,8 +555,15 @@ function Process({
           <div className="step-name">{(workspace?.topic || topic).length > 50 ? (workspace?.topic || topic).slice(0, 48) + "..." : (workspace?.topic || topic)}</div>
         </div>
         <div className="nav-status">
-          {wsLoading ? (
+          {wsLoading && !workspace ? (
             <span className="status-text">Building workspace...</span>
+          ) : workspace?.status === "building" ? (
+            <>
+              <span className="status-dot-round building" />
+              <span className="status-text">
+                {workspace.progress?.processed || 0}/{workspace.progress?.total || "?"} papers
+              </span>
+            </>
           ) : workspace ? (
             <>
               <span className="status-dot-round complete" />
@@ -673,6 +734,19 @@ function Process({
             )}
               </>
             )}
+            {workspace?.status === "building" && workspace.progress && (
+              <div className="building-overlay">
+                <div className="building-progress-bar">
+                  <div
+                    className="building-progress-fill"
+                    style={{ width: `${workspace.progress.total ? (workspace.progress.processed / workspace.progress.total) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="building-label">
+                  {workspace.progress.processed}/{workspace.progress.total} papers
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="graph-legend">
@@ -794,7 +868,7 @@ export default function App() {
   }
 
   if (phase === "process") {
-    return <Process workspace={workspace} loading={loading} topic={pendingTopic} />;
+    return <Process workspace={workspace} loading={loading} topic={pendingTopic} onWorkspaceUpdate={setWorkspace} />;
   }
 
   return <Home onStart={start} loading={loading} error={error} />;

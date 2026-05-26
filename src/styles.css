@@ -153,6 +153,15 @@ button {
   box-shadow: 0 0 8px rgba(76, 175, 80, 0.4);
 }
 
+.status-dot-round.building {
+  background: var(--orange);
+  animation: buildingPulse 1.2s ease-in-out infinite;
+}
+@keyframes buildingPulse {
+  0%, 100% { opacity: 0.4; box-shadow: 0 0 4px var(--accent-mid); }
+  50% { opacity: 1; box-shadow: 0 0 12px var(--accent-hot); }
+}
+
 /* ─── HOME / LANDING ─── */
 
 .home-container {
@@ -1843,4 +1852,40 @@ button {
 @keyframes skeletonPulse {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 0.8; }
+}
+
+/* ─── BUILDING OVERLAY ─── */
+.building-overlay {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(13, 13, 15, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 6px 16px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+.building-progress-bar {
+  width: 80px;
+  height: 4px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.building-progress-fill {
+  height: 100%;
+  background: var(--orange);
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+.building-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
 }
