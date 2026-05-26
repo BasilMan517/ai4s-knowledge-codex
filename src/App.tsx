@@ -74,12 +74,13 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
 
   const topEntities = entityNodes
     .sort((a, b) => (b.count || 0) - (a.count || 0))
-    .slice(0, 20);
+    .slice(0, 12);
 
+  const topEntityIds = new Set(topEntities.map(n => n.id));
   const topPapers = paperNodes
     .filter(p => (paperEdgeCount.get(p.id) || 0) > 0)
     .sort((a, b) => (paperEdgeCount.get(b.id) || 0) - (paperEdgeCount.get(a.id) || 0))
-    .slice(0, 8);
+    .slice(0, 6);
 
   const selectedNodes = [...topEntities, ...topPapers];
   const selectedIds = new Set(selectedNodes.map(n => n.id));
@@ -90,7 +91,7 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
     type: n.type,
     x: 0,
     y: 0,
-    r: n.type === "paper" ? 3 : Math.min(13, 8 + (n.count || 0))
+    r: n.type === "paper" ? 6 : Math.min(16, 9 + (n.count || 0) * 1.5)
   }));
 
   const edges = allEdges
@@ -368,11 +369,11 @@ function Process({
 
     // Force simulation — MiroFish parameters
     const simulation = forceSimulation<ForceNode>(simNodes)
-      .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(150).strength(0.25))
-      .force("charge", forceManyBody<ForceNode>().strength(-400))
-      .force("collide", forceCollide<ForceNode>().radius(d => d.r + 20))
-      .force("x", forceX<ForceNode>(width / 2).strength(0.04))
-      .force("y", forceY<ForceNode>(height / 2).strength(0.04));
+      .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(200).strength(0.2))
+      .force("charge", forceManyBody<ForceNode>().strength(-800))
+      .force("collide", forceCollide<ForceNode>().radius(d => d.r + 35))
+      .force("x", forceX<ForceNode>(width / 2).strength(0.035))
+      .force("y", forceY<ForceNode>(height / 2).strength(0.035));
 
     simulationRef.current = simulation;
 
