@@ -72,15 +72,19 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
     }
   }
 
+  const totalNodes = entityNodes.length + paperNodes.length;
+  const entityLimit = Math.min(entityNodes.length, totalNodes <= 15 ? entityNodes.length : Math.max(10, Math.round(entityNodes.length * 0.6)));
+  const paperLimit = Math.min(paperNodes.length, totalNodes <= 15 ? paperNodes.length : Math.max(5, Math.round(paperNodes.length * 0.4)));
+
   const topEntities = entityNodes
     .sort((a, b) => (b.count || 0) - (a.count || 0))
-    .slice(0, 20);
+    .slice(0, entityLimit);
 
   const topEntityIds = new Set(topEntities.map(n => n.id));
   const topPapers = paperNodes
     .filter(p => (paperEdgeCount.get(p.id) || 0) > 0)
     .sort((a, b) => (paperEdgeCount.get(b.id) || 0) - (paperEdgeCount.get(a.id) || 0))
-    .slice(0, 8);
+    .slice(0, paperLimit);
 
   const selectedNodes = [...topEntities, ...topPapers];
   const selectedIds = new Set(selectedNodes.map(n => n.id));
