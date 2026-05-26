@@ -67,11 +67,11 @@ function uniqueByTitleOrDoi(papers) {
   return result;
 }
 
-export async function searchOpenAlex(topic, options = {}) {
-  const limit = typeof options === "number" ? options : options.limit || 40;
-  const fromYear = typeof options === "object" ? options.fromYear : undefined;
+async function searchOneQuery(query, options = {}) {
+  const limit = options.limit || 40;
+  const fromYear = options.fromYear;
   const params = new URLSearchParams({
-    search: topic,
+    search: query,
     per_page: String(Math.min(Math.max(limit, 1), 100)),
     sort: "relevance_score:desc"
   });
@@ -83,20 +83,37 @@ export async function searchOpenAlex(topic, options = {}) {
   if (config.openAlexMailto) params.set("mailto", config.openAlexMailto);
 
   const url = `https://api.openalex.org/works?${params.toString()}`;
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": config.openAlexMailto
-        ? `ai4s-knowledge-codex mailto:${config.openAlexMailto}`
-        : "ai4s-knowledge-codex"
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": config.openAlexMailto
+          ? `ai4s-knowledge-codex mailto:${config.openAlexMailto}`
+          : "ai4s-knowledge-codex"
+      }
+    });
+
+    if (!response.ok) {
+      console.warn(`OpenAlex query "${query}" failed: ${response.status}`);
+      return [];
     }
-  });
 
-  if (!response.ok) {
-    throw new Error(`OpenAlex request failed: ${response.status} ${response.statusText}`);
+    const payload = await response.json();
+    return (payload.results || [])
+      .map(mapWork)
+      .filter((paper) => paper.title && (paper.abstract || paper.labels.length));
+  } catch (err) {
+    console.warn(`OpenAlex query "${query}" error:`, err.message);
+    return [];
   }
+}
 
-  const payload = await response.json();
-  return uniqueByTitleOrDoi((payload.results || [])
-    .map(mapWork)
-    .filter((paper) => paper.title && (paper.abstract || paper.labels.length)));
+export async function searchOpenAlex(topic, options = {}) {
+  return uniqueByTitleOrDoi(await searchOneQuery(topic, options));
+}
+
+export async function searchOpenAlexMulti(queries, options = {}) {
+  const results = await Promise.all(
+    queries.map((q) => searchOneQuery(q, options))
+  );
+  return uniqueByTitleOrDoi(results.flat());
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, type SimulationNodeDatum, type SimulationLinkDatum } from "d3-force";
-import { zoom as d3Zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
+import { forceSimulation, forceLink, forceManyBody, forceCollide, forceX, forceY, type SimulationNodeDatum, type SimulationLinkDatum } from "d3-force";
+import { zoom as d3Zoom, zoomIdentity, zoomTransform, type ZoomBehavior } from "d3-zoom";
 import { select } from "d3-selection";
+import { drag } from "d3-drag";
 import "d3-transition";
 import { demoPapers } from "./data/demoCorpus";
 import { buildWorkspace } from "./lib/search";
@@ -15,16 +16,16 @@ const API_BASE =
   "http://127.0.0.1:8787";
 
 const colors: Record<string, string> = {
-  material: "#7fbfcc",
-  method: "#c26e55",
-  property: "#7db889",
-  task: "#a68ad4",
-  dataset: "#cc9d4f",
-  system: "#6da6d4",
-  model: "#d48aaf",
-  topic: "#e8e8ec",
-  paper: "#8a8a96",
-  concept: "#a68ad4"
+  material: "#3498db",
+  method: "#FF6B35",
+  property: "#27ae60",
+  task: "#9b59b6",
+  dataset: "#f39c12",
+  system: "#004E89",
+  model: "#C5283D",
+  topic: "#E9724C",
+  paper: "#7B2D8E",
+  concept: "#1A936F",
 };
 
 const workflow = [
@@ -44,7 +45,7 @@ type LayoutNode = {
 };
 
 type ForceNode = SimulationNodeDatum & LayoutNode;
-type ForceEdge = SimulationLinkDatum<ForceNode> & { label: string };
+type ForceEdge = SimulationLinkDatum<ForceNode> & { label: string; curvature: number };
 
 function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: { source: string; target: string; label: string }[] } {
   if (!workspace.graph || workspace.graph.nodes.length === 0) {
@@ -99,67 +100,6 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
   return { nodes, edges };
 }
 
-function runForceLayout(
-  inputNodes: LayoutNode[],
-  inputEdges: { source: string; target: string; label: string }[],
-  width: number,
-  height: number,
-  existingPositions?: Map<string, { x: number; y: number }>
-): { nodes: LayoutNode[]; edges: { source: string; target: string; label: string }[] } {
-  if (inputNodes.length === 0) return { nodes: [], edges: [] };
-
-  const simNodes: ForceNode[] = inputNodes.map(n => {
-    const prev = existingPositions?.get(n.id);
-    return {
-      ...n,
-      x: prev ? prev.x : width / 2 + (Math.random() - 0.5) * width * 0.6,
-      y: prev ? prev.y : height / 2 + (Math.random() - 0.5) * height * 0.6
-    };
-  });
-
-  const nodeById = new Map(simNodes.map(n => [n.id, n]));
-  const simEdges: ForceEdge[] = inputEdges
-    .filter(e => nodeById.has(e.source) && nodeById.has(e.target))
-    .map(e => ({ source: e.source, target: e.target, label: e.label }));
-
-  const sim = forceSimulation<ForceNode>(simNodes)
-    .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(220).strength(0.25))
-    .force("charge", forceManyBody<ForceNode>().strength(-800))
-    .force("center", forceCenter(width / 2, height / 2))
-    .force("collide", forceCollide<ForceNode>().radius(d => d.r + 24))
-    .stop();
-
-  for (let i = 0; i < 300; i++) sim.tick();
-
-  const pad = 40;
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const n of simNodes) {
-    if (n.x! < minX) minX = n.x!;
-    if (n.x! > maxX) maxX = n.x!;
-    if (n.y! < minY) minY = n.y!;
-    if (n.y! > maxY) maxY = n.y!;
-  }
-  const rangeX = maxX - minX || 1;
-  const rangeY = maxY - minY || 1;
-  const scale = Math.min((width - pad * 2) / rangeX, (height - pad * 2) / rangeY, 1.5);
-
-  const cx = width / 2;
-  const cy = height / 2;
-  const midX = (minX + maxX) / 2;
-  const midY = (minY + maxY) / 2;
-
-  const layoutNodes: LayoutNode[] = simNodes.map(n => ({
-    id: n.id,
-    name: n.name,
-    type: n.type,
-    r: n.r,
-    x: cx + (n.x! - midX) * scale,
-    y: cy + (n.y! - midY) * scale
-  }));
-
-  return { nodes: layoutNodes, edges: inputEdges };
-}
-
 function Home({ onStart, loading, error }: { onStart: (topic: string) => void; loading: boolean; error: string | null }) {
   const [topic, setTopic] = useState("");
 
@@ -191,8 +131,8 @@ function Home({ onStart, loading, error }: { onStart: (topic: string) => void; l
               <span className="gradient-text">research expert.</span>
             </h1>
             <p className="hero-desc">
-              <span className="highlight-bold">N.E.R.D</span> searches <span className="highlight-orange">50+</span> papers
-              from OpenAlex, extracts entities and structured facts, builds a knowledge graph,
+              <span className="highlight-bold">N.E.R.D</span> searches papers
+              from OpenAlex &amp; Semantic Scholar, extracts entities and structured facts, builds a knowledge graph,
               and gives you a grounded research chat — all in one workspace.
             </p>
             <p className="slogan-text">Enter a topic. Get an expert.<span className="blinking-cursor">|</span></p>
@@ -220,7 +160,7 @@ function Home({ onStart, loading, error }: { onStart: (topic: string) => void; l
                     placeholder="e.g. solid-state lithium batteries with halide electrolytes&#10;&#10;Supports English and Chinese topics"
                     disabled={loading}
                   />
-                  <span className="model-badge">OpenAlex + LLM</span>
+                  <span className="model-badge">OpenAlex + Semantic Scholar + LLM</span>
                 </div>
               </div>
               {error && (
@@ -255,8 +195,8 @@ function Home({ onStart, loading, error }: { onStart: (topic: string) => void; l
             </p>
             <div className="metrics-row">
               <div className="metric-card">
-                <div className="metric-value">50+</div>
-                <div className="metric-label">Papers</div>
+                <div className="metric-value">2</div>
+                <div className="metric-label">Sources</div>
               </div>
               <div className="metric-card">
                 <div className="metric-value">~200</div>
@@ -307,16 +247,11 @@ function Process({
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [citedPaperIds, setCitedPaperIds] = useState<Set<string>>(new Set());
-  const [visibleCount, setVisibleCount] = useState(0);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [nodePositions, setNodePositions] = useState<Map<string, { x: number; y: number }>>(new Map());
-  const [zoomTransform, setZoomTransform] = useState<ZoomTransform>(zoomIdentity);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const simulationRef = useRef<ReturnType<typeof forceSimulation<ForceNode>> | null>(null);
   const layoutPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const seenNodeIdsRef = useRef<Set<string>>(new Set());
-  const prevNodeCountRef = useRef(0);
 
   const isEmpty = !workspace || (workspace.papers.length === 0 && workspace.entities.length === 0);
 
@@ -325,69 +260,26 @@ function Process({
     [workspace]
   );
 
-  const { nodes: forceNodes, edges: graphEdges } = useMemo(
-    () => {
-      const result = runForceLayout(rawNodes, rawEdges, 1200, 660, layoutPositionsRef.current);
-      const posMap = new Map<string, { x: number; y: number }>();
-      for (const n of result.nodes) posMap.set(n.id, { x: n.x, y: n.y });
-      layoutPositionsRef.current = posMap;
-      return result;
-    },
-    [rawNodes, rawEdges]
-  );
+  const selected = rawNodes.find(n => n.id === selectedId) ?? null;
 
-  const graphNodes = useMemo(() => {
-    if (nodePositions.size === 0) return forceNodes;
-    return forceNodes.map(n => {
-      const pos = nodePositions.get(n.id);
-      return pos ? { ...n, x: pos.x, y: pos.y } : n;
-    });
-  }, [forceNodes, nodePositions]);
+  const citedNodeIds = useMemo(() => {
+    if (citedPaperIds.size === 0) return new Set<string>();
+    const ids = new Set<string>(citedPaperIds);
+    for (const entity of workspace?.entities || []) {
+      if (entity.paperIds.some(pid => citedPaperIds.has(pid))) {
+        ids.add(entity.id);
+      }
+    }
+    return ids;
+  }, [citedPaperIds, workspace]);
 
-  useEffect(() => {
-    const currentCount = graphNodes.length;
-    const prevCount = prevNodeCountRef.current;
-    if (currentCount === 0) {
-      setVisibleCount(0);
-      prevNodeCountRef.current = 0;
-      return;
-    }
-    if (prevCount === 0) {
-      setVisibleCount(0);
-      setNodePositions(new Map());
-      let count = 0;
-      const interval = setInterval(() => {
-        count += Math.max(1, Math.floor(currentCount / 20));
-        if (count >= currentCount) {
-          setVisibleCount(currentCount);
-          clearInterval(interval);
-        } else {
-          setVisibleCount(count);
-        }
-      }, 60);
-      prevNodeCountRef.current = currentCount;
-      return () => clearInterval(interval);
-    }
-    if (currentCount > prevCount) {
-      setVisibleCount(prevCount);
-      let count = prevCount;
-      const newCount = currentCount - prevCount;
-      const interval = setInterval(() => {
-        count += Math.max(1, Math.floor(newCount / 10));
-        if (count >= currentCount) {
-          setVisibleCount(currentCount);
-          clearInterval(interval);
-        } else {
-          setVisibleCount(count);
-        }
-      }, 60);
-      prevNodeCountRef.current = currentCount;
-      return () => clearInterval(interval);
-    }
-    setVisibleCount(currentCount);
-    prevNodeCountRef.current = currentCount;
-  }, [forceNodes.length]);
+  const nodeMap = useMemo(() => {
+    const m = new Map<string, LayoutNode>();
+    for (const n of rawNodes) m.set(n.id, n);
+    return m;
+  }, [rawNodes]);
 
+  // ─── WORKSPACE POLLING ───
   useEffect(() => {
     if (!workspace?.id || workspace.status !== "building") return;
     const timer = setInterval(async () => {
@@ -401,18 +293,288 @@ function Process({
     return () => clearInterval(timer);
   }, [workspace?.id, workspace?.status, onWorkspaceUpdate]);
 
-  const selected = graphNodes.find((n) => n.id === selectedId) ?? null;
+  // ─── D3 IMPERATIVE GRAPH (MiroFish style) ───
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svgEl = svgRef.current;
+    const svg = select(svgEl);
+    const width = 1200;
+    const height = 660;
 
-  const citedNodeIds = useMemo(() => {
-    if (citedPaperIds.size === 0) return new Set<string>();
-    const ids = new Set<string>(citedPaperIds);
-    for (const entity of workspace?.entities || []) {
-      if (entity.paperIds.some(pid => citedPaperIds.has(pid))) {
-        ids.add(entity.id);
+    // Save positions from previous simulation
+    if (simulationRef.current) {
+      simulationRef.current.stop();
+      for (const n of simulationRef.current.nodes()) {
+        if (n.x != null && n.y != null) {
+          layoutPositionsRef.current.set(n.id, { x: n.x, y: n.y });
+        }
       }
     }
-    return ids;
-  }, [citedPaperIds, workspace]);
+
+    svg.selectAll("g.graph-content").remove();
+    simulationRef.current = null;
+
+    if (rawNodes.length === 0) return;
+
+    // Set up zoom once
+    if (!zoomRef.current) {
+      const zoomBehavior = d3Zoom<SVGSVGElement, unknown>()
+        .scaleExtent([0.3, 4])
+        .on("zoom", (event) => {
+          svg.select("g.graph-content").attr("transform", event.transform);
+        });
+      zoomRef.current = zoomBehavior;
+      svg.call(zoomBehavior);
+      svg.on("dblclick.zoom", null);
+    }
+
+    const g = svg.append("g").attr("class", "graph-content");
+    const currentTransform = zoomTransform(svgEl);
+    g.attr("transform", currentTransform.toString());
+
+    // Build simulation nodes with preserved positions
+    const simNodes: ForceNode[] = rawNodes.map(n => {
+      const prev = layoutPositionsRef.current.get(n.id);
+      return {
+        ...n,
+        x: prev ? prev.x : width / 2 + (Math.random() - 0.5) * width * 0.5,
+        y: prev ? prev.y : height / 2 + (Math.random() - 0.5) * height * 0.5,
+      };
+    });
+
+    const nodeIdSet = new Set(simNodes.map(n => n.id));
+
+    // Compute edge curvature for parallel edges
+    const pairCount = new Map<string, number>();
+    for (const e of rawEdges) {
+      if (!nodeIdSet.has(e.source) || !nodeIdSet.has(e.target)) continue;
+      const key = [e.source, e.target].sort().join("|");
+      pairCount.set(key, (pairCount.get(key) || 0) + 1);
+    }
+    const pairIdx = new Map<string, number>();
+    const simEdges: ForceEdge[] = rawEdges
+      .filter(e => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
+      .map(e => {
+        const key = [e.source, e.target].sort().join("|");
+        const total = pairCount.get(key) || 1;
+        const idx = pairIdx.get(key) || 0;
+        pairIdx.set(key, idx + 1);
+        const curvature = total === 1 ? 0.15 : (idx - (total - 1) / 2) * 0.3;
+        return { source: e.source, target: e.target, label: e.label, curvature };
+      });
+
+    // Force simulation — MiroFish parameters
+    const simulation = forceSimulation<ForceNode>(simNodes)
+      .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(150).strength(0.25))
+      .force("charge", forceManyBody<ForceNode>().strength(-400))
+      .force("collide", forceCollide<ForceNode>().radius(d => d.r + 20))
+      .force("x", forceX<ForceNode>(width / 2).strength(0.04))
+      .force("y", forceY<ForceNode>(height / 2).strength(0.04));
+
+    simulationRef.current = simulation;
+
+    // ─── EDGES (curved paths) ───
+    const linkGroup = g.append("g").attr("class", "links");
+    const link = linkGroup.selectAll<SVGPathElement, ForceEdge>("path")
+      .data(simEdges)
+      .enter()
+      .append("path")
+      .attr("class", "graph-edge")
+      .attr("fill", "none")
+      .attr("stroke", "rgba(255, 255, 255, 0.25)")
+      .attr("stroke-width", 1.5);
+
+    // ─── EDGE LABELS with backgrounds ───
+    const edgeLabelGroup = g.append("g").attr("class", "edge-labels");
+    const labeledEdges = simEdges.filter(e => e.label);
+    const edgeLabelG = edgeLabelGroup.selectAll<SVGGElement, ForceEdge>("g")
+      .data(labeledEdges)
+      .enter()
+      .append("g")
+      .attr("class", "edge-label-g")
+      .style("pointer-events", "none");
+
+    edgeLabelG.append("rect")
+      .attr("fill", "rgba(22, 22, 26, 0.9)")
+      .attr("rx", 3)
+      .attr("ry", 3);
+
+    edgeLabelG.append("text")
+      .text(d => d.label.length > 20 ? d.label.slice(0, 18) + "..." : d.label)
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline", "middle")
+      .attr("fill", "#8a8a96")
+      .attr("font-size", "8px")
+      .attr("font-family", "'JetBrains Mono', monospace");
+
+    // Size background rects to fit text
+    edgeLabelG.each(function () {
+      const textEl = select(this).select("text").node() as SVGTextElement;
+      if (!textEl) return;
+      const bbox = textEl.getBBox();
+      select(this).select("rect")
+        .attr("x", -bbox.width / 2 - 4)
+        .attr("y", -bbox.height / 2 - 2)
+        .attr("width", bbox.width + 8)
+        .attr("height", bbox.height + 4);
+    });
+
+    // ─── NODES ───
+    const nodeGroup = g.append("g").attr("class", "nodes");
+    const node = nodeGroup.selectAll<SVGGElement, ForceNode>("g")
+      .data(simNodes)
+      .enter()
+      .append("g")
+      .attr("class", "graph-node")
+      .style("cursor", "pointer")
+      .style("opacity", 0);
+
+    // Fade in
+    node.transition()
+      .duration(400)
+      .delay((_d, i) => i * 25)
+      .style("opacity", 1);
+
+    // Outer glow
+    node.append("circle")
+      .attr("class", "node-glow")
+      .attr("r", d => d.r * 1.8)
+      .attr("fill", d => colors[d.type] || "#888")
+      .attr("opacity", 0.08);
+
+    // Main circle
+    node.append("circle")
+      .attr("class", "node-main")
+      .attr("r", d => d.r)
+      .attr("fill", d => colors[d.type] || "#888")
+      .attr("stroke", "rgba(22, 22, 26, 0.8)")
+      .attr("stroke-width", 2);
+
+    // Center dot
+    node.filter(d => d.r > 8)
+      .append("circle")
+      .attr("r", 2)
+      .attr("fill", "white")
+      .attr("opacity", 0.5);
+
+    // Text labels (non-paper)
+    node.filter(d => d.type !== "paper")
+      .append("text")
+      .text(d => d.name.length > 24 ? d.name.slice(0, 22) + "..." : d.name)
+      .attr("x", d => d.r + 6)
+      .attr("y", 4)
+      .attr("fill", "#8a8a96")
+      .attr("font-size", "10px")
+      .attr("font-weight", "500")
+      .attr("font-family", "'JetBrains Mono', monospace")
+      .style("pointer-events", "none");
+
+    // Paper tooltips
+    node.filter(d => d.type === "paper")
+      .append("title")
+      .text(d => d.name);
+
+    // Click to select/deselect
+    node.on("click", function (event, d) {
+      event.stopPropagation();
+      setSelectedId(prev => prev === d.id ? null : d.id);
+    });
+
+    // D3 drag with simulation reheat (MiroFish style)
+    node.call(
+      drag<SVGGElement, ForceNode>()
+        .on("start", function (event, d) {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+          select(this).style("cursor", "grabbing");
+        })
+        .on("drag", function (event, d) {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on("end", function (event, d) {
+          if (!event.active) simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+          select(this).style("cursor", "pointer");
+        })
+    );
+
+    // Live tick handler — continuous position updates (MiroFish style)
+    simulation.on("tick", () => {
+      link.attr("d", d => {
+        const s = d.source as unknown as ForceNode;
+        const t = d.target as unknown as ForceNode;
+        if (s.x == null || s.y == null || t.x == null || t.y == null) return "";
+        if (s.id === t.id) {
+          return `M${s.x},${s.y} C${s.x - 40},${s.y - 60} ${s.x + 40},${s.y - 60} ${s.x},${s.y}`;
+        }
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const cx = (s.x + t.x) / 2 + dy * d.curvature;
+        const cy = (s.y + t.y) / 2 - dx * d.curvature;
+        return `M${s.x},${s.y} Q${cx},${cy} ${t.x},${t.y}`;
+      });
+
+      edgeLabelG.attr("transform", d => {
+        const s = d.source as unknown as ForceNode;
+        const t = d.target as unknown as ForceNode;
+        if (s.x == null || s.y == null || t.x == null || t.y == null) return "";
+        return `translate(${(s.x + t.x) / 2},${(s.y + t.y) / 2})`;
+      });
+
+      node.attr("transform", d => `translate(${d.x},${d.y})`);
+    });
+
+    return () => {
+      simulation.stop();
+      for (const n of simNodes) {
+        if (n.x != null && n.y != null) {
+          layoutPositionsRef.current.set(n.id, { x: n.x, y: n.y });
+        }
+      }
+    };
+  }, [rawNodes, rawEdges]);
+
+  // ─── HIGHLIGHT EFFECT ───
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svg = select(svgRef.current);
+
+    svg.selectAll<SVGGElement, ForceNode>("g.graph-node")
+      .classed("selected", d => d.id === selectedId)
+      .classed("cited", d => citedNodeIds.has(d.id))
+      .classed("dimmed", d => citedNodeIds.size > 0 && !citedNodeIds.has(d.id) && d.id !== selectedId);
+
+    svg.selectAll<SVGGElement, ForceNode>("g.graph-node").each(function (d) {
+      const mainCircle = select(this).select(".node-main");
+      if (d.id === selectedId) {
+        mainCircle.attr("stroke", "#ff4500").attr("stroke-width", 3);
+      } else {
+        mainCircle.attr("stroke", "rgba(22, 22, 26, 0.8)").attr("stroke-width", 2);
+      }
+    });
+
+    svg.selectAll<SVGPathElement, ForceEdge>("path.graph-edge").each(function (d) {
+      const s = d.source as unknown as ForceNode;
+      const t = d.target as unknown as ForceNode;
+      const isHighlighted = (selectedId && (s.id === selectedId || t.id === selectedId))
+        || (citedNodeIds.size > 0 && citedNodeIds.has(s.id) && citedNodeIds.has(t.id));
+      const isDimmed = citedNodeIds.size > 0 && !isHighlighted;
+      select(this)
+        .attr("stroke", isHighlighted ? "#6da6d4" : isDimmed ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.25)")
+        .attr("stroke-width", isHighlighted ? 2.5 : 1.5);
+    });
+
+    svg.selectAll<SVGGElement, ForceEdge>("g.edge-label-g")
+      .style("opacity", d => {
+        const s = d.source as unknown as ForceNode;
+        const t = d.target as unknown as ForceNode;
+        if (!selectedId) return 1;
+        return (s.id === selectedId || t.id === selectedId) ? 1 : 0.3;
+      });
+  }, [selectedId, citedNodeIds]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -523,54 +685,6 @@ function Process({
     "What materials or datasets are studied?"
   ], [workspace, topic]);
 
-  const nodeMap = useMemo(() => {
-    const m = new Map<string, LayoutNode>();
-    for (const n of graphNodes) m.set(n.id, n);
-    return m;
-  }, [graphNodes]);
-
-  const handlePointerDown = useCallback((e: React.PointerEvent, nodeId: string) => {
-    e.stopPropagation();
-    setDragId(nodeId);
-    (e.target as Element).setPointerCapture(e.pointerId);
-  }, []);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragId || !svgRef.current) return;
-    const svg = svgRef.current;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return;
-    const svgPt = pt.matrixTransform(ctm.inverse());
-    const x = (svgPt.x - zoomTransform.x) / zoomTransform.k;
-    const y = (svgPt.y - zoomTransform.y) / zoomTransform.k;
-    setNodePositions(prev => {
-      const next = new Map(prev);
-      next.set(dragId, { x, y });
-      return next;
-    });
-  }, [dragId, zoomTransform]);
-
-  const handlePointerUp = useCallback(() => {
-    setDragId(null);
-  }, []);
-
-  useEffect(() => {
-    if (!svgRef.current) return;
-    const svg = svgRef.current;
-    const zoomBehavior = d3Zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.3, 4])
-      .on("zoom", (event) => {
-        setZoomTransform(event.transform);
-      });
-    zoomRef.current = zoomBehavior;
-    select(svg).call(zoomBehavior);
-    select(svg).on("dblclick.zoom", null);
-    return () => { select(svg).on(".zoom", null); };
-  }, []);
-
   const handleZoomIn = useCallback(() => {
     if (!svgRef.current || !zoomRef.current) return;
     select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.4);
@@ -645,9 +759,9 @@ function Process({
             </div>
             {workspace && (
               <div className="header-right">
-                <span className="stat-item">{graphNodes.length} nodes</span>
+                <span className="stat-item">{rawNodes.length} nodes</span>
                 <span className="stat-divider">|</span>
-                <span className="stat-item">{graphEdges.length} edges</span>
+                <span className="stat-item">{rawEdges.length} edges</span>
                 <span className="stat-divider">|</span>
                 <span className="stat-item">{workspace.facts.length} facts</span>
               </div>
@@ -665,121 +779,54 @@ function Process({
               </div>
             ) : (
               <>
-            <svg
-              className="graph-svg"
-              viewBox="0 0 1200 660"
-              ref={svgRef}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
-            >
-              <g transform={`translate(${zoomTransform.x},${zoomTransform.y}) scale(${zoomTransform.k})`}>
-              {graphEdges.map((edge, i) => {
-                const s = nodeMap.get(edge.source);
-                const t = nodeMap.get(edge.target);
-                if (!s || !t) return null;
-                const si = graphNodes.indexOf(s);
-                const ti = graphNodes.indexOf(t);
-                if (si >= visibleCount || ti >= visibleCount) return null;
-                const isHighlighted = (selectedId && (edge.source === selectedId || edge.target === selectedId))
-                  || (citedNodeIds.size > 0 && citedNodeIds.has(edge.source) && citedNodeIds.has(edge.target));
-                const mx = (s.x + t.x) / 2;
-                const my = (s.y + t.y) / 2;
-                const isDimEdge = citedNodeIds.size > 0 && !isHighlighted;
-                return (
-                  <g key={`e-${i}`} className="edge-group-enter">
-                    <line
-                      x1={s.x} y1={s.y}
-                      x2={t.x} y2={t.y}
-                      className={isHighlighted ? "edge selected" : isDimEdge ? "edge dimmed" : "edge"}
-                    />
-                    {edge.label && isHighlighted && (
-                      <text x={mx} y={my - 4} className="edge-label" textAnchor="middle">
-                        {edge.label.length > 20 ? edge.label.slice(0, 18) + "..." : edge.label}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-              {graphNodes.map((node, i) => {
-                if (i >= visibleCount) return null;
-                const color = colors[node.type] || "#888";
-                const isSelected = selectedId === node.id;
-                const isCited = citedNodeIds.has(node.id);
-                const isDragging = dragId === node.id;
-                const dimmed = citedNodeIds.size > 0 && !isCited && !isSelected;
-                return (
-                  <g
-                    key={node.id}
-                    className={`svg-node node-enter ${isSelected ? "selected" : ""} ${isCited ? "cited" : ""} ${dimmed ? "dimmed" : ""} ${isDragging ? "dragging" : ""}`}
-                    transform={`translate(${node.x} ${node.y})`}
-                    onClick={() => { if (!isDragging) setSelectedId(isSelected ? null : node.id); }}
-                    onPointerDown={(e) => handlePointerDown(e, node.id)}
-                    style={{ animationDelay: `${i * 30}ms` }}
-                  >
-                    <circle r={node.r * 1.8} fill={color} opacity={0.06} />
-                    <circle r={node.r} fill={color} />
-                    {node.r > 8 && <circle r={2} fill="white" opacity={0.5} />}
-                    {node.type === "paper" ? (
-                      <title>{node.name}</title>
-                    ) : (
-                      <text
-                        x={node.r + 6}
-                        y={4}
-                        textAnchor="start"
-                        className={isCited ? "cited-text" : ""}
-                      >
-                        {node.name.length > 24 ? `${node.name.slice(0, 22)}...` : node.name}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-              </g>
-            </svg>
+                <svg
+                  className="graph-svg"
+                  viewBox="0 0 1200 660"
+                  ref={svgRef}
+                />
 
-            <div className="zoom-controls">
-              <button className="zoom-btn" onClick={handleZoomIn} title="Zoom in">+</button>
-              <button className="zoom-btn" onClick={handleZoomReset} title="Reset zoom">⟳</button>
-              <button className="zoom-btn" onClick={handleZoomOut} title="Zoom out">−</button>
-            </div>
-
-            {selected && (
-              <div className="detail-panel">
-                <div className="detail-panel-header">
-                  <span className="detail-title">Node Details</span>
-                  <span className="detail-badge" style={{ background: colors[selected.type] || "#888" }}>
-                    {selected.type}
-                  </span>
+                <div className="zoom-controls">
+                  <button className="zoom-btn" onClick={handleZoomIn} title="Zoom in">+</button>
+                  <button className="zoom-btn" onClick={handleZoomReset} title="Reset zoom">⟳</button>
+                  <button className="zoom-btn" onClick={handleZoomOut} title="Zoom out">−</button>
                 </div>
-                <div className="detail-content">
-                  <div className="detail-row">
-                    <span className="detail-label">Name:</span>
-                    <span className="detail-value highlight">{selected.name}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="detail-label">Edges:</span>
-                    <span className="detail-value">{graphEdges.filter(e => e.source === selected.id || e.target === selected.id).length} connections</span>
-                  </div>
-                  {selected.type !== "topic" && (
-                    <div className="detail-section">
-                      <span className="detail-label">Related:</span>
-                      <p className="detail-summary">
-                        {graphEdges
-                          .filter(e => e.source === selected.id || e.target === selected.id)
-                          .slice(0, 3)
-                          .map(e => {
-                            const otherId = e.source === selected.id ? e.target : e.source;
-                            const other = nodeMap.get(otherId);
-                            return other ? other.name : otherId;
-                          })
-                          .join(", ") || "No direct connections"}
-                      </p>
+
+                {selected && (
+                  <div className="detail-panel">
+                    <div className="detail-panel-header">
+                      <span className="detail-title">Node Details</span>
+                      <span className="detail-badge" style={{ background: colors[selected.type] || "#888" }}>
+                        {selected.type}
+                      </span>
                     </div>
-                  )}
-                </div>
-              </div>
-            )}
+                    <div className="detail-content">
+                      <div className="detail-row">
+                        <span className="detail-label">Name:</span>
+                        <span className="detail-value highlight">{selected.name}</span>
+                      </div>
+                      <div className="detail-row">
+                        <span className="detail-label">Edges:</span>
+                        <span className="detail-value">{rawEdges.filter(e => e.source === selected.id || e.target === selected.id).length} connections</span>
+                      </div>
+                      {selected.type !== "topic" && (
+                        <div className="detail-section">
+                          <span className="detail-label">Related:</span>
+                          <p className="detail-summary">
+                            {rawEdges
+                              .filter(e => e.source === selected.id || e.target === selected.id)
+                              .slice(0, 3)
+                              .map(e => {
+                                const otherId = e.source === selected.id ? e.target : e.source;
+                                const other = nodeMap.get(otherId);
+                                return other ? other.name : otherId;
+                              })
+                              .join(", ") || "No direct connections"}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </>
             )}
             {workspace?.status === "building" && workspace.progress && (
