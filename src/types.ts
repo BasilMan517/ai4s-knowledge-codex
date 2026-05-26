@@ -76,6 +76,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   evidenceIds?: string[];
+  paperIds?: string[];
 };
 
 export type GraphNode = {

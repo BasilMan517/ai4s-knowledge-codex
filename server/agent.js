@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { config } from "./config.js";
 import { contextForModel, graphToMermaid, makeFallbackAnswer, retrieve, summarizeWorkspace } from "./kb.js";
 
-function getClient() {
+export function getClient() {
   if (!config.openaiApiKey) return null;
   return new OpenAI({
     apiKey: config.openaiApiKey,
@@ -10,7 +10,7 @@ function getClient() {
   });
 }
 
-function responseText(response) {
+export function responseText(response) {
   if (response.output_text) return response.output_text;
   return (response.output || [])
     .flatMap((item) => item.content || [])
@@ -20,9 +20,9 @@ function responseText(response) {
 }
 
 export async function answerQuestion(workspace, question) {
-  let evidence = retrieve(workspace, question, 14);
+  let evidence = retrieve(workspace, question, 6);
   if (!evidence.length) {
-    evidence = retrieve(workspace, workspace.topic, 14);
+    evidence = retrieve(workspace, workspace.topic, 6);
   }
   const client = getClient();
 
@@ -34,17 +34,17 @@ export async function answerQuestion(workspace, question) {
     };
   }
 
-  const prompt = `You are AI4S Knowledge Codex, a rigorous scientific research agent.
+  const prompt = `You are a research assistant grounded in a curated knowledge base.
 
-Use only the provided workspace context unless you clearly mark a statement as inference.
-Answer in the same language as the user's question.
-Every scientific claim about papers must cite paper titles, DOI, or evidence IDs from the context.
-When evidence is weak, say what is missing.
+Rules:
+- Answer in the same language as the user's question.
+- Be concise: 1-3 short paragraphs. No exhaustive literature reviews.
+- At the end, list the papers you referenced as "[id] Author, Year" — only the ones you actually used, not all of them.
+- If evidence is insufficient, say so briefly.
 
 ${contextForModel(workspace, evidence)}
 
-User question:
-${question}`;
+Question: ${question}`;
 
   const response = await client.responses.create({
     model: config.openaiModel,

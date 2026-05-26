@@ -14,9 +14,11 @@
     "lint": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@types/d3-force": "^3.0.10",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.1.0",
     "cors": "^2.8.5",
+    "d3-force": "^3.0.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "lucide-react": "^0.468.0",

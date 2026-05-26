@@ -321,20 +321,20 @@ export function summarizeWorkspace(workspace) {
 
 export function contextForModel(workspace, evidence = []) {
   const paperLines = workspace.papers
-    .slice(0, 24)
+    .slice(0, 12)
     .map(
       (paper) =>
-        `- ${paper.id}: ${makeCitation(paper)}\n  Labels: ${(paper.labels || []).slice(0, 8).join(", ")}\n  Abstract: ${(paper.abstract || "").slice(0, 900)}`
+        `- ${paper.id}: ${makeCitation(paper)}\n  Labels: ${(paper.labels || []).slice(0, 5).join(", ")}\n  Abstract: ${(paper.abstract || "").slice(0, 300)}`
     )
     .join("\n");
 
   const factLines = workspace.facts
-    .slice(0, 80)
-    .map((fact) => `- ${fact.subject} | ${fact.predicate} | ${fact.object} | confidence=${fact.confidence}`)
+    .slice(0, 30)
+    .map((fact) => `- ${fact.subject} | ${fact.predicate} | ${fact.object}`)
     .join("\n");
 
   const evidenceLines = evidence
-    .slice(0, 16)
+    .slice(0, 8)
     .map((item) => `- ${item.id}: ${item.text}\n  Citation: ${item.citation}`)
     .join("\n");
 

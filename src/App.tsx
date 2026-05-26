@@ -1,1025 +1,705 @@
-import {
-  BookOpen,
-  Braces,
-  BrainCircuit,
-  Database,
-  Download,
-  FileText,
-  GitBranch,
-  Layers,
-  Loader2,
-  MessageSquareText,
-  Network,
-  Play,
-  Search,
-  Send,
-  Table2
-} from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { Artifact, ChatMessage, EvidenceChunk, GraphEdge, GraphNode, Paper, Workspace, WorkspaceSummaryInfo } from "./types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, type SimulationNodeDatum, type SimulationLinkDatum } from "d3-force";
+import { demoPapers } from "./data/demoCorpus";
+import { buildWorkspace } from "./lib/search";
+import type { ChatMessage, GraphEdge, Workspace } from "./types";
+import "./styles.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? "http://localhost:8787" : "");
-const DEFAULT_TOPIC = "solid-state electrolyte AI agents for materials discovery";
+type Phase = "home" | "process";
 
-type WorkMode = "idle" | "building" | "loadingWorkspace";
+const API_BASE =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ||
+  "http://127.0.0.1:8787";
 
-const FACT_GROUPS = [
-  {
-    key: "studies_material_system",
-    title: "Material systems",
-    empty: "No material facts yet"
-  },
-  {
-    key: "uses_method",
-    title: "Methods",
-    empty: "No method facts yet"
-  },
-  {
-    key: "targets_property",
-    title: "Properties",
-    empty: "No property facts yet"
-  }
+const colors: Record<string, string> = {
+  material: "#7fbfcc",
+  method: "#c26e55",
+  property: "#7db889",
+  task: "#a68ad4",
+  dataset: "#cc9d4f",
+  system: "#6da6d4",
+  model: "#d48aaf",
+  topic: "#e8e8ec",
+  paper: "#8a8a96",
+  concept: "#a68ad4"
+};
+
+const workflow = [
+  { num: "01", title: "Paper Discovery", desc: "Search and retrieve papers from OpenAlex, building a curated corpus." },
+  { num: "02", title: "Entity Extraction", desc: "Identify materials, methods, properties and other entities from abstracts." },
+  { num: "03", title: "Knowledge Graph", desc: "Link entities with structured facts and build an interactive graph." },
+  { num: "04", title: "Research Chat", desc: "Ask grounded questions — answers are cited against your knowledge base." },
 ];
 
-function citation(paper: Paper) {
-  const venue = paper.venue ? `${paper.venue}${paper.year ? `, ${paper.year}` : ""}` : paper.year || "";
-  return `${paper.title}${venue ? ` (${venue})` : ""}${paper.doi ? ` DOI ${paper.doi}` : ""}`;
-}
+type LayoutNode = {
+  id: string;
+  name: string;
+  type: string;
+  x: number;
+  y: number;
+  r: number;
+};
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {})
-    }
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+type ForceNode = SimulationNodeDatum & LayoutNode;
+type ForceEdge = SimulationLinkDatum<ForceNode> & { label: string };
+
+function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: { source: string; target: string; label: string }[] } {
+  if (!workspace.graph || workspace.graph.nodes.length === 0) {
+    const entities = workspace.entities.slice(0, 20);
+    const nodes: LayoutNode[] = entities.map(e => ({ id: e.id, name: e.name, type: e.type, x: 0, y: 0, r: 10 }));
+    const edges = entities.map(e => ({ source: entities[0]?.id || "", target: e.id, label: "" }));
+    return { nodes, edges };
   }
-  return response.json() as Promise<T>;
+
+  const allNodes = workspace.graph.nodes;
+  const allEdges = workspace.graph.edges;
+
+  const entityNodes = allNodes.filter(n => n.type !== "paper");
+  const paperNodes = allNodes.filter(n => n.type === "paper");
+
+  const entityIds = new Set(entityNodes.map(n => n.id));
+  const paperEdgeCount = new Map<string, number>();
+  for (const e of allEdges) {
+    if (entityIds.has(e.target)) {
+      paperEdgeCount.set(e.source, (paperEdgeCount.get(e.source) || 0) + 1);
+    }
+    if (entityIds.has(e.source)) {
+      paperEdgeCount.set(e.target, (paperEdgeCount.get(e.target) || 0) + 1);
+    }
+  }
+
+  const topPapers = paperNodes
+    .filter(p => (paperEdgeCount.get(p.id) || 0) > 0)
+    .sort((a, b) => (paperEdgeCount.get(b.id) || 0) - (paperEdgeCount.get(a.id) || 0))
+    .slice(0, 25);
+
+  const selectedNodes = [...entityNodes, ...topPapers];
+  const selectedIds = new Set(selectedNodes.map(n => n.id));
+
+  const nodes: LayoutNode[] = selectedNodes.map(n => ({
+    id: n.id,
+    name: n.label,
+    type: n.type,
+    x: 0,
+    y: 0,
+    r: n.type === "paper" ? 5 : Math.min(14, 8 + (n.count || 0))
+  }));
+
+  const edges = allEdges
+    .filter((e: GraphEdge) => selectedIds.has(e.source) && selectedIds.has(e.target))
+    .map((e: GraphEdge) => ({ source: e.source, target: e.target, label: e.label }));
+
+  return { nodes, edges };
 }
 
-function TopBar({
-  topic,
-  setTopic,
-  limit,
-  setLimit,
-  fromYear,
-  setFromYear,
-  health,
-  loading,
-  mode,
-  onBuild
-}: {
-  topic: string;
-  setTopic: (topic: string) => void;
-  limit: number;
-  setLimit: (limit: number) => void;
-  fromYear: number;
-  setFromYear: (year: number) => void;
-  health?: { openaiConfigured: boolean; model: string };
-  loading: boolean;
-  mode: WorkMode;
-  onBuild: () => void;
-}) {
+function runForceLayout(
+  inputNodes: LayoutNode[],
+  inputEdges: { source: string; target: string; label: string }[],
+  width: number,
+  height: number
+): { nodes: LayoutNode[]; edges: { source: string; target: string; label: string }[] } {
+  if (inputNodes.length === 0) return { nodes: [], edges: [] };
+
+  const simNodes: ForceNode[] = inputNodes.map(n => ({
+    ...n,
+    x: width / 2 + (Math.random() - 0.5) * width * 0.6,
+    y: height / 2 + (Math.random() - 0.5) * height * 0.6
+  }));
+
+  const nodeById = new Map(simNodes.map(n => [n.id, n]));
+  const simEdges: ForceEdge[] = inputEdges
+    .filter(e => nodeById.has(e.source) && nodeById.has(e.target))
+    .map(e => ({ source: e.source, target: e.target, label: e.label }));
+
+  const sim = forceSimulation<ForceNode>(simNodes)
+    .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(80).strength(0.4))
+    .force("charge", forceManyBody<ForceNode>().strength(-200))
+    .force("center", forceCenter(width / 2, height / 2))
+    .force("collide", forceCollide<ForceNode>().radius(d => d.r + 8))
+    .stop();
+
+  for (let i = 0; i < 200; i++) sim.tick();
+
+  const pad = 30;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of simNodes) {
+    if (n.x! < minX) minX = n.x!;
+    if (n.x! > maxX) maxX = n.x!;
+    if (n.y! < minY) minY = n.y!;
+    if (n.y! > maxY) maxY = n.y!;
+  }
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const scale = Math.min((width - pad * 2) / rangeX, (height - pad * 2) / rangeY, 1.5);
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+
+  const layoutNodes: LayoutNode[] = simNodes.map(n => ({
+    id: n.id,
+    name: n.name,
+    type: n.type,
+    r: n.r,
+    x: cx + (n.x! - midX) * scale,
+    y: cy + (n.y! - midY) * scale
+  }));
+
+  return { nodes: layoutNodes, edges: inputEdges };
+}
+
+function Home({ onStart, loading, error }: { onStart: (topic: string) => void; loading: boolean; error: string | null }) {
+  const [topic, setTopic] = useState("");
+
+  const handleSubmit = () => {
+    const t = topic.trim();
+    if (t && !loading) onStart(t);
+  };
+
   return (
-    <header className="topbar">
-      <div className="brandRow">
-        <div className="brand">
-          <div className="brandMark">
-            <BrainCircuit size={20} />
+    <div className="home-container">
+      <nav className="navbar">
+        <div className="nav-brand">N.E.R.D</div>
+        <div className="nav-status">
+          <span className="nav-chip">MIROFISH SHELL</span>
+          <span className="nav-chip">CODEX READY</span>
+        </div>
+      </nav>
+
+      <div className="main-content">
+        <div className="hero-section">
+          <div className="hero-left">
+            <div className="tag-row">
+              <span className="orange-tag">AI4S</span>
+              <span className="version-text">v0.1 PREVIEW</span>
+            </div>
+            <h1 className="main-title">
+              Build your
+              <br />
+              <span className="gradient-text">research expert.</span>
+            </h1>
+            <p className="hero-desc">
+              <span className="highlight-bold">N.E.R.D</span> searches <span className="highlight-orange">50+</span> papers
+              from OpenAlex, extracts entities and structured facts, builds a knowledge graph,
+              and gives you a grounded research chat — all in one workspace.
+            </p>
+            <p className="slogan-text">Enter a topic. Get an expert.<span className="blinking-cursor">|</span></p>
+            <div className="decoration-square" />
           </div>
+
+          <div className="right-panel">
+            <div className="console-box">
+              <div className="console-section">
+                <div className="console-header">
+                  <span>RESEARCH SEED</span>
+                  <span>TOPIC INPUT</span>
+                </div>
+                <div className="input-wrapper">
+                  <textarea
+                    className="code-input"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSubmit();
+                      }
+                    }}
+                    placeholder="e.g. solid-state lithium batteries with halide electrolytes&#10;&#10;Supports English and Chinese topics"
+                    disabled={loading}
+                  />
+                  <span className="model-badge">OpenAlex + LLM</span>
+                </div>
+              </div>
+              {error && (
+                <div className="console-section" style={{ paddingTop: 0 }}>
+                  <div className="error-banner">
+                    <span>ERROR</span> {error}
+                  </div>
+                </div>
+              )}
+              <div className="console-section btn-section">
+                <button
+                  className="start-engine-btn"
+                  onClick={handleSubmit}
+                  disabled={loading || !topic.trim()}
+                >
+                  <span>{loading ? "BUILDING WORKSPACE..." : "START ENGINE"}</span>
+                  <span>→</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-section">
           <div>
-            <strong>NERD</strong>
-            <span>AI4S model workspace</span>
-          </div>
-        </div>
-
-        <div className={`healthBadge ${health?.openaiConfigured ? "ready" : "fallback"}`}>
-          <span className="statusDot" />
-          {health?.openaiConfigured ? "Online" : "Local"}
-          <span>{health?.model || "checking"}</span>
-        </div>
-      </div>
-
-      <div className="buildSurface">
-        <label className="topicInput">
-          <Search size={18} />
-          <input
-            value={topic}
-            onChange={(event) => setTopic(event.target.value)}
-            placeholder="输入一个科学领域，例如 solid-state electrolyte discovery"
-            aria-label="Scientific topic"
-          />
-        </label>
-
-        <div className="buildControls">
-          <label>
-            Papers
-            <input
-              type="number"
-              min={5}
-              max={100}
-              value={limit}
-              onChange={(event) => setLimit(Number(event.target.value))}
-              aria-label="Paper limit"
-            />
-          </label>
-          <label>
-            Since
-            <input
-              type="number"
-              min={1900}
-              max={new Date().getFullYear()}
-              value={fromYear}
-              onChange={(event) => setFromYear(Number(event.target.value))}
-              aria-label="From year"
-            />
-          </label>
-        </div>
-
-        <button className="iconButton primary" onClick={onBuild} disabled={loading || !topic.trim()}>
-          {loading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-          <span>{mode === "building" ? "Building" : mode === "loadingWorkspace" ? "Loading" : "Generate Model"}</span>
-        </button>
-      </div>
-    </header>
-  );
-}
-
-function ProcessFlow({
-  topic,
-  workspace,
-  artifacts,
-  mode,
-  buildTick
-}: {
-  topic: string;
-  workspace?: Workspace;
-  artifacts: Artifact[];
-  mode: WorkMode;
-  buildTick: number;
-}) {
-  const graph = workspace?.graph;
-  const hasTopic = Boolean(topic.trim());
-  const hasWorkspace = Boolean(workspace);
-  const isBuilding = mode === "building";
-  const activePhase = isBuilding ? Math.min(Math.floor(buildTick / 3), 3) : hasWorkspace ? 4 : hasTopic ? 0 : -1;
-  const steps = [
-    {
-      icon: <Search size={18} />,
-      title: "Search",
-      value: hasWorkspace ? `${workspace?.papers.length ?? 0} papers` : isBuilding ? "searching" : "waiting",
-      detail: hasWorkspace ? "literature corpus" : "field to corpus",
-      state: hasWorkspace || activePhase > 0 ? "done" : activePhase === 0 ? "active" : "idle"
-    },
-    {
-      icon: <Layers size={18} />,
-      title: "Structure",
-      value: hasWorkspace ? `${workspace?.facts.length ?? 0} facts` : isBuilding && activePhase === 1 ? "extracting" : "waiting",
-      detail: hasWorkspace ? `${workspace?.entities.length ?? 0} entities` : "facts and entities",
-      state: hasWorkspace || activePhase > 1 ? "done" : activePhase === 1 ? "active" : "idle"
-    },
-    {
-      icon: <Network size={18} />,
-      title: "Connect",
-      value: hasWorkspace ? `${graph?.edges.length ?? 0} edges` : isBuilding && activePhase === 2 ? "linking" : "waiting",
-      detail: hasWorkspace ? `${graph?.nodes.length ?? 0} nodes` : "knowledge graph",
-      state: hasWorkspace || activePhase > 2 ? "done" : activePhase === 2 ? "active" : "idle"
-    },
-    {
-      icon: <BrainCircuit size={18} />,
-      title: "Activate",
-      value: hasWorkspace ? "ready" : isBuilding && activePhase === 3 ? "assembling" : "waiting",
-      detail: "expert workspace",
-      state: hasWorkspace ? "done" : activePhase === 3 ? "active" : "idle"
-    }
-  ];
-
-  return (
-    <section className="processDeck" aria-label="AI4S workflow">
-      <div className="processHeader">
-        <div>
-          <span className="eyebrow">Topic to Private Model</span>
-          <h2>{hasTopic ? topic : "输入一个科学领域"}</h2>
-        </div>
-        <div className={`modelState ${hasWorkspace ? "ready" : isBuilding ? "active" : ""}`}>
-          <BrainCircuit size={18} />
-          <span>{hasWorkspace ? "Workspace ready" : isBuilding ? "Building workspace" : hasTopic ? "Ready to build" : "Awaiting topic"}</span>
-        </div>
-      </div>
-
-      <div className="processBody">
-        <div className="processFlow">
-          {steps.map((step, index) => (
-            <article className={`flowStep ${step.state}`} key={step.title}>
-              <div className="stepIndex">
-                <span>{index + 1}</span>
-                {step.icon}
+            <div className="panel-header">
+              <span className="status-dot">◆</span> WORKFLOW
+            </div>
+            <h2 className="section-title">How it works</h2>
+            <p className="section-desc">
+              From topic to knowledge graph in four automated steps.
+            </p>
+            <div className="metrics-row">
+              <div className="metric-card">
+                <div className="metric-value">50+</div>
+                <div className="metric-label">Papers</div>
               </div>
-              <div>
-                <h3>{step.title}</h3>
-                <strong>{step.value}</strong>
-                <p>{step.detail}</p>
+              <div className="metric-card">
+                <div className="metric-value">~200</div>
+                <div className="metric-label">Facts</div>
               </div>
-            </article>
-          ))}
-        </div>
-
-        <BuildTrace workspace={workspace} artifacts={artifacts} activePhase={activePhase} isBuilding={isBuilding} />
-      </div>
-    </section>
-  );
-}
-
-function BuildTrace({
-  workspace,
-  artifacts,
-  activePhase,
-  isBuilding
-}: {
-  workspace?: Workspace;
-  artifacts: Artifact[];
-  activePhase: number;
-  isBuilding: boolean;
-}) {
-  const graph = workspace?.graph;
-  const rows = [
-    {
-      label: "Corpus",
-      value: workspace ? `${workspace.papers.length} papers` : "queued",
-      detail: workspace?.papers[0]?.title || "relevance-ranked papers"
-    },
-    {
-      label: "Memory",
-      value: workspace ? `${workspace.facts.length} facts` : "queued",
-      detail: workspace?.facts[0] ? `${workspace.facts[0].subject} -> ${workspace.facts[0].object}` : "materials, methods, properties"
-    },
-    {
-      label: "Graph",
-      value: workspace ? `${graph?.nodes.length ?? 0} nodes` : "queued",
-      detail: workspace?.graph?.edges[0]?.label || "relation compiler"
-    },
-    {
-      label: "Codex",
-      value: workspace ? `${artifacts.length} files` : "queued",
-      detail: workspace ? "chat and deliverables" : "grounded context"
-    }
-  ];
-
-  return (
-    <div className="buildTrace">
-      <div className="traceHeader">
-        <MessageSquareText size={16} />
-        <span>{workspace ? "Model assets" : isBuilding ? "Live build" : "Build preview"}</span>
-      </div>
-      {rows.map((row, index) => {
-        const state = workspace || activePhase > index ? "done" : activePhase === index ? "active" : "idle";
-        return (
-          <article className={`traceRow ${state}`} key={row.label}>
-            <span className="traceDot" />
-            <div>
-              <strong>{row.label}</strong>
-              <p>{row.value}</p>
+              <div className="metric-card">
+                <div className="metric-value">1</div>
+                <div className="metric-label">Expert</div>
+              </div>
             </div>
-            <small>{row.detail}</small>
-          </article>
-        );
-      })}
-    </div>
-  );
-}
+          </div>
 
-function WorkspaceHistory({
-  workspaces,
-  activeId,
-  loading,
-  onLoad
-}: {
-  workspaces: WorkspaceSummaryInfo[];
-  activeId?: string;
-  loading: boolean;
-  onLoad: (workspaceId: string) => void;
-}) {
-  if (!workspaces.length) return null;
-
-  return (
-    <details className="workspaceHistory">
-      <summary>
-        <span>Workspaces</span>
-        <small>{workspaces.length} saved</small>
-      </summary>
-      <div className="workspaceChips">
-        {workspaces.slice(0, 8).map((item) => (
-          <button
-            key={item.id}
-            className={item.id === activeId ? "active" : ""}
-            onClick={() => onLoad(item.id)}
-            disabled={loading}
-          >
-            <span>{item.topic}</span>
-            <small>
-              {item.paperCount} papers · {item.factCount} facts
-            </small>
-          </button>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function ResearchMap({ workspace }: { workspace: Workspace }) {
-  const max = Math.max(...workspace.clusters.map((cluster) => cluster.paperIds.length), 1);
-  return (
-    <div className="researchMap">
-      {workspace.clusters.slice(0, 6).map((cluster) => (
-        <section className="clusterBand" key={cluster.id}>
-          <div className="clusterTop">
-            <div>
-              <h3>{cluster.label}</h3>
-              <p>{cluster.terms.slice(0, 7).join(" · ")}</p>
+          <div className="steps-container">
+            <div className="steps-header">
+              <span className="status-dot">◆</span> PIPELINE STEPS
             </div>
-            <strong>{cluster.paperIds.length}</strong>
-          </div>
-          <div className="barTrack">
-            <span style={{ width: `${(cluster.paperIds.length / max) * 100}%` }} />
-          </div>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function CompactFacts({ workspace }: { workspace: Workspace }) {
-  const facts = workspace.facts.slice(0, 6);
-  return (
-    <div className="compactFacts">
-      {facts.map((fact) => (
-        <article key={fact.id}>
-          <span>{fact.predicate.replace(/_/g, " ")}</span>
-          <strong>{fact.object}</strong>
-          <p>{fact.subject}</p>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function FactMatrix({ workspace }: { workspace: Workspace }) {
-  return (
-    <div className="factMatrix">
-      {FACT_GROUPS.map((group) => {
-        const facts = workspace.facts.filter((fact) => fact.predicate === group.key).slice(0, 4);
-        return (
-          <section className="factColumn" key={group.key}>
-            <div>
-              <span>{facts.length}</span>
-              <h3>{group.title}</h3>
+            <div className="workflow-list">
+              {workflow.map((step) => (
+                <div className="workflow-item" key={step.num}>
+                  <span className="step-num">{step.num}</span>
+                  <div className="step-info">
+                    <div className="step-title">{step.title}</div>
+                    <div className="step-desc">{step.desc}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-            {facts.length ? (
-              facts.map((fact) => (
-                <article key={fact.id}>
-                  <strong>{fact.object}</strong>
-                  <p>{fact.subject}</p>
-                  <small>{Math.round(fact.confidence * 100)}% confidence</small>
-                </article>
-              ))
-            ) : (
-              <p className="mutedLine">{group.empty}</p>
-            )}
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
-function EntityCloud({ workspace }: { workspace: Workspace }) {
-  return (
-    <div className="entityCloud">
-      {workspace.entities.slice(0, 18).map((entity) => (
-        <span key={entity.id} className={`entityTag ${entity.type}`}>
-          {entity.name}
-          <small>{entity.paperIds.length}</small>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function GraphPreview({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }) {
-  const visibleNodes = useMemo(() => nodes.slice(0, 14), [nodes]);
-  const positioned = useMemo(
-    () =>
-      visibleNodes.map((node, index) => {
-        const angle = (Math.PI * 2 * index) / Math.max(visibleNodes.length, 1) - Math.PI / 2;
-        const radius = index === 0 ? 0 : 92;
-        return {
-          ...node,
-          x: index === 0 ? 160 : 160 + Math.cos(angle) * radius,
-          y: index === 0 ? 112 : 112 + Math.sin(angle) * radius
-        };
-      }),
-    [visibleNodes]
-  );
-  const nodeById = useMemo(() => new Map(positioned.map((node) => [node.id, node])), [positioned]);
-  const visibleEdges = edges.filter((edge) => nodeById.has(edge.source) && nodeById.has(edge.target)).slice(0, 18);
-
-  if (!nodes.length) {
-    return (
-      <div className="graphPreview empty">
-        <Network size={28} />
-        <span>Knowledge graph</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="graphPreview">
-      <svg viewBox="0 0 320 224" role="img" aria-label="Knowledge graph preview">
-        {visibleEdges.map((edge) => {
-          const source = nodeById.get(edge.source);
-          const target = nodeById.get(edge.target);
-          if (!source || !target) return null;
-          return <line key={edge.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} />;
-        })}
-        {positioned.map((node, index) => (
-          <g key={node.id}>
-            <circle className={index === 0 ? "coreNode" : ""} cx={node.x} cy={node.y} r={index === 0 ? 18 : 11} />
-            <text x={node.x} y={node.y + 25}>
-              {node.label.length > 18 ? `${node.label.slice(0, 18)}...` : node.label}
-            </text>
-          </g>
-        ))}
-      </svg>
-    </div>
-  );
-}
-
-function KnowledgeStage({ workspace }: { workspace: Workspace }) {
-  const graph = workspace.graph;
-  const latestYear = Math.max(...workspace.papers.map((paper) => paper.year || 0));
-
-  return (
-    <section className="knowledgeStage">
-      <div className="stageHeader">
-        <div>
-          <span className="eyebrow">Generated Model</span>
-          <h1>{workspace.topic}</h1>
-        </div>
-        <div className="metricPills">
-          <span>{workspace.papers.length} papers</span>
-          <span>{workspace.entities.length} entities</span>
-          <span>{workspace.facts.length} facts</span>
-          <span>{graph?.edges.length ?? 0} graph edges</span>
-        </div>
-      </div>
-
-      <div className="knowledgeSnapshot">
-        <article>
-          <span>Corpus</span>
-          <strong>{workspace.papers.length}</strong>
-          <p>papers through {latestYear || "n.d."}</p>
-        </article>
-        <article>
-          <span>Knowledge memory</span>
-          <strong>{workspace.facts.length}</strong>
-          <p>typed facts with evidence</p>
-        </article>
-        <article>
-          <span>Model substrate</span>
-          <strong>{graph?.nodes.length ?? 0}</strong>
-          <p>nodes connected by {graph?.edges.length ?? 0} relations</p>
-        </article>
-      </div>
-
-      <div className="stageGrid">
-        <section>
-          <div className="sectionTitle">
-            <Network size={17} />
-            <h2>Knowledge graph</h2>
           </div>
-          <GraphPreview nodes={graph?.nodes || []} edges={graph?.edges || []} />
-        </section>
-        <section>
-          <div className="sectionTitle">
-            <Database size={17} />
-            <h2>Evidence memory</h2>
-          </div>
-          <CompactFacts workspace={workspace} />
-        </section>
-      </div>
-
-      <details className="kbShowcase">
-        <summary>
-          <Database size={17} />
-          <span>Explore structured knowledge</span>
-        </summary>
-        <div className="sectionTitle">
-          <Database size={17} />
-          <h2>Knowledge base</h2>
         </div>
-        <FactMatrix workspace={workspace} />
-        <EntityCloud workspace={workspace} />
-      </details>
-    </section>
+      </div>
+    </div>
   );
 }
 
-function ChatPanel({
+function Process({
   workspace,
-  messages,
-  evidence,
-  question,
-  setQuestion,
-  loading,
-  onAsk
-}: {
-  workspace?: Workspace;
-  messages: ChatMessage[];
-  evidence: EvidenceChunk[];
-  question: string;
-  setQuestion: (question: string) => void;
-  loading: boolean;
-  onAsk: () => void;
-}) {
-  const suggestedQuestions = [
-    "这个领域最重要的材料体系和性能指标是什么？",
-    "把方法路线按实验、仿真、机器学习分类。",
-    "基于证据列出三个高价值研究假设。"
-  ];
-
-  return (
-    <main className="chatPanel">
-      <div className="panelHeader">
-        <div>
-          <span className="eyebrow">Ask the Model</span>
-          <h2>Expert chat</h2>
-        </div>
-        <MessageSquareText size={20} />
-      </div>
-
-      <div className="promptRail">
-        {suggestedQuestions.map((item) => (
-          <button key={item} onClick={() => setQuestion(item)} disabled={!workspace || loading}>
-            {item}
-          </button>
-        ))}
-      </div>
-
-      <div className="messages">
-        {messages.map((message) => (
-          <div className={`message ${message.role}`} key={message.id}>
-            <span>{message.role === "user" ? "User" : "AI4S Codex"}</span>
-            <p>{message.content}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="composer">
-        <input
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && workspace && !loading) onAsk();
-          }}
-          placeholder={workspace ? "问材料体系、机理、数据缺口、实验路线..." : "先构建知识库"}
-          disabled={!workspace || loading}
-        />
-        <button className="sendButton" onClick={onAsk} disabled={!workspace || loading || !question.trim()}>
-          {loading ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-        </button>
-      </div>
-
-      <div className="evidenceStrip">
-        <strong>Grounding</strong>
-        {(evidence.length ? evidence : workspace?.chunks?.slice(0, 3) || []).slice(0, 3).map((item) => (
-          <article key={item.id}>
-            <span>{item.kind}</span>
-            <p>{item.text}</p>
-            <small>{item.citation}</small>
-          </article>
-        ))}
-      </div>
-    </main>
-  );
-}
-
-function ArtifactPanel({
-  workspace,
-  artifacts,
-  loading,
-  onGenerate
 }: {
   workspace: Workspace;
-  artifacts: Artifact[];
-  loading: boolean;
-  onGenerate: (kind: string) => void;
 }) {
-  const actions = [
-    { kind: "report", label: "Research brief", detail: "investor-ready field readout", icon: <FileText size={17} /> },
-    { kind: "materials-analysis", label: "Materials analysis", detail: "systems, properties, gaps", icon: <Braces size={17} /> },
-    { kind: "codex-context", label: "Codex context", detail: "portable expert workspace", icon: <BrainCircuit size={17} /> },
-    { kind: "graph-json", label: "Graph JSON", detail: "machine-readable graph", icon: <Network size={17} /> },
-    { kind: "graph-mermaid", label: "Graph Mermaid", detail: "editable diagram source", icon: <GitBranch size={17} /> },
-    { kind: "facts-csv", label: "Facts CSV", detail: "structured evidence table", icon: <Table2 size={17} /> }
-  ];
-
-  return (
-    <section className="artifactPanel">
-      <div className="panelHeader compact">
-        <div>
-          <span className="eyebrow">Export</span>
-          <h2>Files</h2>
-        </div>
-        <Download size={20} />
-      </div>
-
-      <div className="artifactActions">
-        {actions.map((action) => (
-          <button key={action.kind} onClick={() => onGenerate(action.kind)} disabled={loading}>
-            <span>{action.icon}</span>
-            <strong>{action.label}</strong>
-            <small>{action.detail}</small>
-          </button>
-        ))}
-      </div>
-
-      <div className="artifactList">
-        {loading && <p>Generating file from {workspace.topic}...</p>}
-        {artifacts.length ? (
-          artifacts.map((artifact) => (
-            <a key={artifact.filename} href={`${API_BASE}${artifact.url}`} target="_blank" rel="noreferrer">
-              <Download size={16} />
-              {artifact.filename}
-            </a>
-          ))
-        ) : (
-          <p>No files yet.</p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function PapersTable({ papers }: { papers: Paper[] }) {
-  return (
-    <div className="tableWrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Paper</th>
-            <th>Year</th>
-            <th>Venue</th>
-            <th>Concepts</th>
-            <th>Cites</th>
-          </tr>
-        </thead>
-        <tbody>
-          {papers.map((paper) => (
-            <tr key={paper.id}>
-              <td>
-                <strong>{paper.title}</strong>
-                <small>{paper.authors || "Unknown authors"}</small>
-              </td>
-              <td>{paper.year ?? ""}</td>
-              <td>{paper.venue ?? ""}</td>
-              <td>{paper.labels.slice(0, 5).join(", ")}</td>
-              <td>{paper.citationCount ?? ""}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function FactsTable({ workspace }: { workspace: Workspace }) {
-  return (
-    <div className="tableWrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Subject</th>
-            <th>Predicate</th>
-            <th>Object</th>
-            <th>Confidence</th>
-          </tr>
-        </thead>
-        <tbody>
-          {workspace.facts.slice(0, 180).map((fact) => (
-            <tr key={fact.id}>
-              <td>
-                <strong>{fact.subject}</strong>
-                <small>{fact.paperTitle || fact.paperId}</small>
-              </td>
-              <td>{fact.predicate}</td>
-              <td>{fact.object}</td>
-              <td>{Math.round(fact.confidence * 100)}%</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function GraphView({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }) {
-  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  return (
-    <div className="graphList">
-      {edges.slice(0, 160).map((edge) => {
-        const source = nodeById.get(edge.source);
-        const target = nodeById.get(edge.target);
-        return (
-          <div className="graphEdge" key={edge.id}>
-            <span>{source?.label || edge.source}</span>
-            <code>{edge.label}</code>
-            <span>{target?.label || edge.target}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function DetailsShelf({ workspace }: { workspace: Workspace }) {
-  const firstPaper = workspace.papers[0];
-  return (
-    <section className="detailsShelf">
-      <details>
-        <summary>
-          <BookOpen size={17} />
-          Source papers
-        </summary>
-        {firstPaper && (
-          <article className="paperSpotlight">
-            <strong>{firstPaper.title}</strong>
-            <p>{firstPaper.abstract || "No abstract available from OpenAlex."}</p>
-            <small>{citation(firstPaper)}</small>
-          </article>
-        )}
-        <PapersTable papers={workspace.papers} />
-      </details>
-
-      <details>
-        <summary>
-          <Database size={17} />
-          Full facts table
-        </summary>
-        <FactsTable workspace={workspace} />
-      </details>
-
-      <details>
-        <summary>
-          <Network size={17} />
-          Graph edges
-        </summary>
-        <GraphView nodes={workspace.graph?.nodes || []} edges={workspace.graph?.edges || []} />
-      </details>
-    </section>
-  );
-}
-
-function EmptyState({ onBuild, loading }: { onBuild: () => void; loading: boolean }) {
-  return (
-    <section className="emptyHero">
-      <div className="emptyCopy">
-        <span className="eyebrow">AI4S Knowledge Infrastructure</span>
-        <h1>从一个研究领域，生成可对话的材料发现模型</h1>
-        <p>自动收集论文、整理 evidence、编译知识图谱，并交给 Codex 作为领域工作台。</p>
-        <div className="emptyFlow">
-          <span>论文搜索</span>
-          <span>知识库</span>
-          <span>知识图谱</span>
-          <span>模型工作台</span>
-        </div>
-        <button className="iconButton primary" onClick={onBuild} disabled={loading}>
-          {loading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-          <span>Generate model</span>
-        </button>
-      </div>
-
-      <div className="demoCanvas" aria-hidden="true">
-        <GraphPreview nodes={[]} edges={[]} />
-        <div className="demoMetric">
-          <span>Private model workspace</span>
-          <strong>Corpus + Graph + Codex</strong>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-export function App() {
-  const [topic, setTopic] = useState(DEFAULT_TOPIC);
-  const [limit, setLimit] = useState(45);
-  const [fromYear, setFromYear] = useState(2018);
-  const [workspace, setWorkspace] = useState<Workspace | undefined>();
-  const [workspaceSummaries, setWorkspaceSummaries] = useState<WorkspaceSummaryInfo[]>([]);
-  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [health, setHealth] = useState<{ openaiConfigured: boolean; model: string } | undefined>();
-  const [question, setQuestion] = useState("这个 topic 里面主要材料体系、方法路线和数据缺口是什么？");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [evidence, setEvidence] = useState<EvidenceChunk[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [workMode, setWorkMode] = useState<WorkMode>("idle");
-  const [buildTick, setBuildTick] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [artifactLoading, setArtifactLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [citedPaperIds, setCitedPaperIds] = useState<Set<string>>(new Set());
+  const [visibleCount, setVisibleCount] = useState(0);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [nodePositions, setNodePositions] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
 
-  async function refreshWorkspaceSummaries() {
-    const payload = await api<{ workspaces: WorkspaceSummaryInfo[] }>("/api/workspaces");
-    setWorkspaceSummaries(payload.workspaces);
-  }
+  const isEmpty = workspace.papers.length === 0 && workspace.entities.length === 0;
 
-  async function loadWorkspace(workspaceId: string) {
-    setLoading(true);
-    setWorkMode("loadingWorkspace");
-    setError("");
-    try {
-      const payload = await api<{ workspace: Workspace; artifacts: Artifact[] }>(`/api/workspaces/${workspaceId}`);
-      setWorkspace(payload.workspace);
-      setArtifacts(payload.artifacts);
-      setTopic(payload.workspace.topic);
-      window.history.replaceState(null, "", `?workspace=${payload.workspace.id}`);
-      setEvidence([]);
-      setMessages([
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          content: `已加载历史知识库：${payload.workspace.topic}。包含 ${payload.workspace.papers.length} 篇论文、${payload.workspace.facts.length} 条 facts。`
-        }
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load workspace");
-    } finally {
-      setLoading(false);
-      setWorkMode("idle");
-    }
-  }
+  const { nodes: rawNodes, edges: rawEdges } = useMemo(
+    () => selectGraphNodes(workspace),
+    [workspace]
+  );
 
-  async function buildKnowledgeBase() {
-    setLoading(true);
-    setWorkMode("building");
-    setBuildTick(0);
-    setError("");
-    try {
-      const payload = await api<{ workspace: Workspace; artifacts: Artifact[] }>("/api/workspaces", {
-        method: "POST",
-        body: JSON.stringify({ topic, limit, fromYear })
-      });
-      setWorkspace(payload.workspace);
-      setArtifacts(payload.artifacts);
-      window.history.replaceState(null, "", `?workspace=${payload.workspace.id}`);
-      setEvidence([]);
-      setMessages([
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          content: `知识库已建立：${payload.workspace.papers.length} 篇论文，${payload.workspace.entities.length} 个实体，${payload.workspace.facts.length} 条结构化事实，${payload.workspace.graph?.edges.length ?? 0} 条图谱边。`
-        }
-      ]);
-      await refreshWorkspaceSummaries();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to build workspace");
-    } finally {
-      setLoading(false);
-      setWorkMode("idle");
-    }
-  }
+  const { nodes: forceNodes, edges: graphEdges } = useMemo(
+    () => runForceLayout(rawNodes, rawEdges, 840, 460),
+    [rawNodes, rawEdges]
+  );
 
-  async function ask() {
-    if (!workspace || !question.trim()) return;
-    const currentQuestion = question.trim();
-    setChatLoading(true);
-    setError("");
-    setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", content: currentQuestion }]);
-    try {
-      const payload = await api<{ answer: string; evidence: EvidenceChunk[]; model: string }>(
-        `/api/workspaces/${workspace.id}/chat`,
-        {
-          method: "POST",
-          body: JSON.stringify({ message: currentQuestion })
-        }
-      );
-      setEvidence(payload.evidence);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          content: `${payload.answer}\n\nModel: ${payload.model}`
-        }
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to ask");
-    } finally {
-      setChatLoading(false);
-    }
-  }
-
-  async function generateArtifact(kind: string) {
-    if (!workspace) return;
-    setArtifactLoading(true);
-    setError("");
-    try {
-      const payload = await api<{ artifact: Artifact }>(`/api/workspaces/${workspace.id}/artifacts`, {
-        method: "POST",
-        body: JSON.stringify({ kind })
-      });
-      setArtifacts((current) => {
-        const withoutDuplicate = current.filter((artifact) => artifact.filename !== payload.artifact.filename);
-        return [...withoutDuplicate, payload.artifact];
-      });
-      await refreshWorkspaceSummaries();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate artifact");
-    } finally {
-      setArtifactLoading(false);
-    }
-  }
+  const graphNodes = useMemo(() => {
+    if (nodePositions.size === 0) return forceNodes;
+    return forceNodes.map(n => {
+      const pos = nodePositions.get(n.id);
+      return pos ? { ...n, x: pos.x, y: pos.y } : n;
+    });
+  }, [forceNodes, nodePositions]);
 
   useEffect(() => {
-    async function bootstrap() {
-      try {
-        const healthPayload = await api<{ ok: boolean; openaiConfigured: boolean; model: string }>("/api/health");
-        setHealth(healthPayload);
-        const summariesPayload = await api<{ workspaces: WorkspaceSummaryInfo[] }>("/api/workspaces");
-        setWorkspaceSummaries(summariesPayload.workspaces);
-        const workspaceId = new URLSearchParams(window.location.search).get("workspace");
-        if (workspaceId) {
-          await loadWorkspace(workspaceId);
-        }
-      } catch {
-        setError("Backend is not running. Start it with npm run dev.");
+    setVisibleCount(0);
+    setNodePositions(new Map());
+    if (graphNodes.length === 0) return;
+    let count = 0;
+    const total = graphNodes.length;
+    const interval = setInterval(() => {
+      count += Math.max(1, Math.floor(total / 20));
+      if (count >= total) {
+        setVisibleCount(total);
+        clearInterval(interval);
+      } else {
+        setVisibleCount(count);
+      }
+    }, 60);
+    return () => clearInterval(interval);
+  }, [forceNodes.length]);
+
+  const selected = graphNodes.find((n) => n.id === selectedId) ?? null;
+
+  const citedNodeIds = useMemo(() => {
+    if (citedPaperIds.size === 0) return new Set<string>();
+    const ids = new Set<string>(citedPaperIds);
+    for (const entity of workspace.entities) {
+      if (entity.paperIds.some(pid => citedPaperIds.has(pid))) {
+        ids.add(entity.id);
       }
     }
-    bootstrap();
+    return ids;
+  }, [citedPaperIds, workspace]);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   useEffect(() => {
-    if (workMode !== "building") return;
-    const timer = window.setInterval(() => {
-      setBuildTick((current) => current + 1);
-    }, 850);
-    return () => window.clearInterval(timer);
-  }, [workMode]);
+    scrollToBottom();
+  }, [chatMessages, chatLoading, scrollToBottom]);
+
+  const sendMessage = useCallback(async (text: string) => {
+    const msg = text.trim();
+    if (!msg || chatLoading || !workspace?.id) return;
+
+    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: "user", content: msg };
+    setChatMessages(prev => [...prev, userMsg]);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/workspaces/${workspace.id}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      const pIds: string[] = [...new Set((data.evidence || []).map((e: { paperId: string }) => e.paperId).filter(Boolean))] as string[];
+      const assistantMsg: ChatMessage = {
+        id: `a-${Date.now()}`,
+        role: "assistant",
+        content: data.answer || "No response received.",
+        evidenceIds: data.evidence?.map((e: { id: string }) => e.id),
+        paperIds: pIds
+      };
+      setChatMessages(prev => [...prev, assistantMsg]);
+      setCitedPaperIds(new Set(pIds));
+    } catch (err) {
+      setChatMessages(prev => [...prev, {
+        id: `e-${Date.now()}`,
+        role: "assistant",
+        content: `Error: ${err instanceof Error ? err.message : "Failed to reach server"}. Make sure the backend is running.`
+      }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [chatLoading, workspace?.id]);
+
+  const suggestions = useMemo(() => [
+    `What are the key findings in ${workspace.topic.split(" ").slice(0, 4).join(" ")}?`,
+    "What methods are most commonly used?",
+    "Summarize the main research gaps",
+    "What materials or datasets are studied?"
+  ], [workspace]);
+
+  const nodeMap = useMemo(() => {
+    const m = new Map<string, LayoutNode>();
+    for (const n of graphNodes) m.set(n.id, n);
+    return m;
+  }, [graphNodes]);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent, nodeId: string) => {
+    e.stopPropagation();
+    setDragId(nodeId);
+    (e.target as Element).setPointerCapture(e.pointerId);
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragId || !svgRef.current) return;
+    const svg = svgRef.current;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const svgPt = pt.matrixTransform(ctm.inverse());
+    setNodePositions(prev => {
+      const next = new Map(prev);
+      next.set(dragId, { x: svgPt.x, y: svgPt.y });
+      return next;
+    });
+  }, [dragId]);
+
+  const handlePointerUp = useCallback(() => {
+    setDragId(null);
+  }, []);
 
   return (
-    <div className="appShell">
-      <TopBar
-        topic={topic}
-        setTopic={setTopic}
-        limit={limit}
-        setLimit={setLimit}
-        fromYear={fromYear}
-        setFromYear={setFromYear}
-        health={health}
-        loading={loading}
-        mode={workMode}
-        onBuild={buildKnowledgeBase}
-      />
-      {error && <div className="errorBanner">{error}</div>}
+    <div className="process-page">
+      <nav className="navbar">
+        <div className="nav-brand">N.E.R.D</div>
+        <div className="nav-center">
+          <div className="step-badge">WORKSPACE</div>
+          <div className="step-name">{workspace.topic.length > 50 ? workspace.topic.slice(0, 48) + "..." : workspace.topic}</div>
+        </div>
+        <div className="nav-status">
+          <span className="status-dot-round complete" />
+          <span className="status-text">{workspace.papers.length} papers / {workspace.entities.length} entities</span>
+        </div>
+      </nav>
 
-      <ProcessFlow topic={topic} workspace={workspace} artifacts={artifacts} mode={workMode} buildTick={buildTick} />
-
-      {!workspace ? (
-        <EmptyState onBuild={buildKnowledgeBase} loading={loading} />
-      ) : (
-        <>
-          <div className="primaryGrid">
-            <KnowledgeStage workspace={workspace} />
-            <ChatPanel
-              workspace={workspace}
-              messages={messages}
-              evidence={evidence}
-              question={question}
-              setQuestion={setQuestion}
-              loading={chatLoading}
-              onAsk={ask}
-            />
+      <main className="process-content-main">
+        <section className="graph-shell">
+          <div className="panel-header graph-header">
+            <div className="header-left">
+              <span className="header-deco">◆</span>
+              <span className="header-title">Knowledge Graph</span>
+            </div>
+            {workspace && (
+              <div className="header-right">
+                <span className="stat-item">{graphNodes.length} nodes</span>
+                <span className="stat-divider">|</span>
+                <span className="stat-item">{graphEdges.length} edges</span>
+                <span className="stat-divider">|</span>
+                <span className="stat-item">{workspace.facts.length} facts</span>
+              </div>
+            )}
           </div>
 
-          <ArtifactPanel
-            workspace={workspace}
-            artifacts={artifacts}
-            loading={artifactLoading}
-            onGenerate={generateArtifact}
-          />
+          <div className="graph-container">
+            {isEmpty ? (
+              <div className="graph-empty">
+                <div className="graph-empty-icon">∅</div>
+                <div className="graph-empty-title">No papers found</div>
+                <div className="graph-empty-desc">
+                  Try a different topic or use English keywords for better results.
+                </div>
+              </div>
+            ) : (
+              <>
+            <svg
+              className="graph-svg"
+              viewBox="0 0 840 460"
+              ref={svgRef}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+            >
+              {graphEdges.map((edge, i) => {
+                const s = nodeMap.get(edge.source);
+                const t = nodeMap.get(edge.target);
+                if (!s || !t) return null;
+                const si = graphNodes.indexOf(s);
+                const ti = graphNodes.indexOf(t);
+                if (si >= visibleCount || ti >= visibleCount) return null;
+                const isHighlighted = (selectedId && (edge.source === selectedId || edge.target === selectedId))
+                  || (citedNodeIds.size > 0 && citedNodeIds.has(edge.source) && citedNodeIds.has(edge.target));
+                const mx = (s.x + t.x) / 2;
+                const my = (s.y + t.y) / 2;
+                const isDimEdge = citedNodeIds.size > 0 && !isHighlighted;
+                return (
+                  <g key={`e-${i}`} className="edge-group-enter">
+                    <line
+                      x1={s.x} y1={s.y}
+                      x2={t.x} y2={t.y}
+                      className={isHighlighted ? "edge selected" : isDimEdge ? "edge dimmed" : "edge"}
+                    />
+                    {edge.label && isHighlighted && (
+                      <text x={mx} y={my - 4} className="edge-label" textAnchor="middle">
+                        {edge.label.length > 20 ? edge.label.slice(0, 18) + "..." : edge.label}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+              {graphNodes.map((node, i) => {
+                if (i >= visibleCount) return null;
+                const color = colors[node.type] || "#888";
+                const isSelected = selectedId === node.id;
+                const isCited = citedNodeIds.has(node.id);
+                const isDragging = dragId === node.id;
+                const dimmed = citedNodeIds.size > 0 && !isCited && !isSelected;
+                return (
+                  <g
+                    key={node.id}
+                    className={`svg-node node-enter ${isSelected ? "selected" : ""} ${isCited ? "cited" : ""} ${dimmed ? "dimmed" : ""} ${isDragging ? "dragging" : ""}`}
+                    transform={`translate(${node.x} ${node.y})`}
+                    onClick={() => { if (!isDragging) setSelectedId(isSelected ? null : node.id); }}
+                    onPointerDown={(e) => handlePointerDown(e, node.id)}
+                    style={{ animationDelay: `${i * 30}ms` }}
+                  >
+                    <circle r={node.r * 1.8} fill={color} opacity={0.06} />
+                    <circle r={node.r} fill={color} />
+                    {node.r > 8 && <circle r={2} fill="white" opacity={0.5} />}
+                    <text
+                      x={node.r + 6}
+                      y={4}
+                      textAnchor="start"
+                      className={isCited ? "cited-text" : ""}
+                    >
+                      {node.name.length > 24 ? `${node.name.slice(0, 22)}...` : node.name}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
 
-          <DetailsShelf workspace={workspace} />
-          <WorkspaceHistory
-            workspaces={workspaceSummaries}
-            activeId={workspace?.id}
-            loading={loading}
-            onLoad={loadWorkspace}
-          />
-        </>
-      )}
+            {selected && (
+              <div className="detail-panel">
+                <div className="detail-panel-header">
+                  <span className="detail-title">Node Details</span>
+                  <span className="detail-badge" style={{ background: colors[selected.type] || "#888" }}>
+                    {selected.type}
+                  </span>
+                </div>
+                <div className="detail-content">
+                  <div className="detail-row">
+                    <span className="detail-label">Name:</span>
+                    <span className="detail-value highlight">{selected.name}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Edges:</span>
+                    <span className="detail-value">{graphEdges.filter(e => e.source === selected.id || e.target === selected.id).length} connections</span>
+                  </div>
+                  {selected.type !== "topic" && (
+                    <div className="detail-section">
+                      <span className="detail-label">Related:</span>
+                      <p className="detail-summary">
+                        {graphEdges
+                          .filter(e => e.source === selected.id || e.target === selected.id)
+                          .slice(0, 3)
+                          .map(e => {
+                            const otherId = e.source === selected.id ? e.target : e.source;
+                            const other = nodeMap.get(otherId);
+                            return other ? other.name : otherId;
+                          })
+                          .join(", ") || "No direct connections"}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+              </>
+            )}
+          </div>
+
+          <div className="graph-legend">
+            {Object.entries(colors)
+              .filter(([type]) => type !== "topic" && type !== "paper")
+              .map(([type, color]) => (
+                <div className="legend-item" key={type}>
+                  <span className="legend-dot" style={{ background: color }} />
+                  <span className="legend-label">{type}</span>
+                </div>
+              ))}
+          </div>
+        </section>
+
+        <aside className="chat-panel">
+          <div className="chat-header">
+            <span className="chat-header-title">
+              <span className="header-deco">▣</span> Research Chat
+            </span>
+            <span className="chat-header-meta">{workspace.id ? "LIVE" : "LOCAL"}</span>
+          </div>
+
+          {chatMessages.length === 0 && !chatLoading ? (
+            <div className="chat-welcome">
+              <div className="chat-welcome-icon">◇</div>
+              <div className="chat-welcome-title">Ask your research expert</div>
+              <div className="chat-welcome-desc">
+                This workspace has {workspace.papers.length} papers and {workspace.entities.length} entities. Ask any question and get answers grounded in the literature.
+              </div>
+            </div>
+          ) : (
+            <div className="chat-messages">
+              {chatMessages.map((msg) => (
+                <div key={msg.id} className={`chat-bubble ${msg.role}`}>
+                  {msg.content}
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="typing-indicator">
+                  <span /><span /><span />
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+
+          {chatMessages.length === 0 && !chatLoading && (
+            <div className="chat-suggestions">
+              {suggestions.map((s, i) => (
+                <button key={i} className="suggestion-chip" onClick={() => sendMessage(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="chat-input-bar">
+            <textarea
+              className="chat-input"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage(chatInput);
+                }
+              }}
+              placeholder="Ask a research question..."
+              rows={1}
+              disabled={chatLoading}
+            />
+            <button
+              className="chat-send-btn"
+              onClick={() => sendMessage(chatInput)}
+              disabled={chatLoading || !chatInput.trim()}
+            >
+              SEND
+            </button>
+          </div>
+        </aside>
+      </main>
     </div>
   );
+}
+
+export default function App() {
+  const [phase, setPhase] = useState<Phase>("home");
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function start(topic: string) {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/api/workspaces`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: topic.trim() || "AI for scientific discovery", limit: 50, fromYear: 2018 })
+      });
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      const data = (await response.json()) as { workspace?: Workspace };
+      if (!data.workspace) throw new Error("No workspace in response");
+      setWorkspace(data.workspace);
+      setPhase("process");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      console.warn("API failed, using demo data:", msg);
+      setError(`Backend unreachable (${msg}). Using demo data — chat will not work.`);
+      setWorkspace(buildWorkspace(topic.trim() || "AI for scientific discovery", demoPapers));
+      setPhase("process");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (phase === "process" && workspace) {
+    return <Process workspace={workspace} />;
+  }
+
+  return <Home onStart={start} loading={loading} error={error} />;
 }
