@@ -58,6 +58,50 @@ Question: ${question}`;
   };
 }
 
+export async function answerQuestionStream(workspace, question, onChunk, onDone) {
+  let evidence = retrieve(workspace, question, 6);
+  if (!evidence.length) {
+    evidence = retrieve(workspace, workspace.topic, 6);
+  }
+  const client = getClient();
+
+  if (!client) {
+    const fallback = makeFallbackAnswer(workspace, question, evidence);
+    onChunk(fallback);
+    onDone(fallback, evidence);
+    return;
+  }
+
+  const prompt = `You are a research assistant grounded in a curated knowledge base.
+
+Rules:
+- Answer in the same language as the user's question.
+- Be concise: 1-3 short paragraphs. No exhaustive literature reviews.
+- At the end, list the papers you referenced as "[id] Author, Year" — only the ones you actually used, not all of them.
+- If evidence is insufficient, say so briefly.
+
+${contextForModel(workspace, evidence)}
+
+Question: ${question}`;
+
+  const stream = await client.chat.completions.create({
+    model: config.openaiModel,
+    stream: true,
+    messages: [{ role: "user", content: prompt }]
+  });
+
+  let full = "";
+  for await (const chunk of stream) {
+    const delta = chunk.choices?.[0]?.delta?.content;
+    if (delta) {
+      full += delta;
+      onChunk(delta);
+    }
+  }
+
+  onDone(full, evidence);
+}
+
 export async function generateArtifact(workspace, kind, instruction = "") {
   const client = getClient();
   const baseContext = contextForModel(workspace, retrieve(workspace, workspace.topic, 20));

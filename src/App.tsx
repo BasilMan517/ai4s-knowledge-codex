@@ -71,7 +71,7 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
   const topPapers = paperNodes
     .filter(p => (paperEdgeCount.get(p.id) || 0) > 0)
     .sort((a, b) => (paperEdgeCount.get(b.id) || 0) - (paperEdgeCount.get(a.id) || 0))
-    .slice(0, 25);
+    .slice(0, 12);
 
   const selectedNodes = [...entityNodes, ...topPapers];
   const selectedIds = new Set(selectedNodes.map(n => n.id));
@@ -82,7 +82,7 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
     type: n.type,
     x: 0,
     y: 0,
-    r: n.type === "paper" ? 5 : Math.min(14, 8 + (n.count || 0))
+    r: n.type === "paper" ? 3 : Math.min(16, 10 + (n.count || 0))
   }));
 
   const edges = allEdges
@@ -112,10 +112,10 @@ function runForceLayout(
     .map(e => ({ source: e.source, target: e.target, label: e.label }));
 
   const sim = forceSimulation<ForceNode>(simNodes)
-    .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(80).strength(0.4))
-    .force("charge", forceManyBody<ForceNode>().strength(-200))
+    .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(140).strength(0.3))
+    .force("charge", forceManyBody<ForceNode>().strength(-350))
     .force("center", forceCenter(width / 2, height / 2))
-    .force("collide", forceCollide<ForceNode>().radius(d => d.r + 8))
+    .force("collide", forceCollide<ForceNode>().radius(d => d.r + 14))
     .stop();
 
   for (let i = 0; i < 200; i++) sim.tick();
@@ -282,8 +282,12 @@ function Home({ onStart, loading, error }: { onStart: (topic: string) => void; l
 
 function Process({
   workspace,
+  loading: wsLoading,
+  topic,
 }: {
-  workspace: Workspace;
+  workspace: Workspace | null;
+  loading: boolean;
+  topic: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -296,10 +300,10 @@ function Process({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  const isEmpty = workspace.papers.length === 0 && workspace.entities.length === 0;
+  const isEmpty = !workspace || (workspace.papers.length === 0 && workspace.entities.length === 0);
 
   const { nodes: rawNodes, edges: rawEdges } = useMemo(
-    () => selectGraphNodes(workspace),
+    () => workspace ? selectGraphNodes(workspace) : { nodes: [], edges: [] },
     [workspace]
   );
 
@@ -339,7 +343,7 @@ function Process({
   const citedNodeIds = useMemo(() => {
     if (citedPaperIds.size === 0) return new Set<string>();
     const ids = new Set<string>(citedPaperIds);
-    for (const entity of workspace.entities) {
+    for (const entity of workspace?.entities || []) {
       if (entity.paperIds.some(pid => citedPaperIds.has(pid))) {
         ids.add(entity.id);
       }
@@ -364,41 +368,97 @@ function Process({
     setChatInput("");
     setChatLoading(true);
 
+    const assistantId = `a-${Date.now()}`;
+
     try {
-      const res = await fetch(`${API_BASE}/api/workspaces/${workspace.id}/chat`, {
+      const streamRes = await fetch(`${API_BASE}/api/workspaces/${workspace.id}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: msg })
       });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
-      const pIds: string[] = [...new Set((data.evidence || []).map((e: { paperId: string }) => e.paperId).filter(Boolean))] as string[];
-      const assistantMsg: ChatMessage = {
-        id: `a-${Date.now()}`,
-        role: "assistant",
-        content: data.answer || "No response received.",
-        evidenceIds: data.evidence?.map((e: { id: string }) => e.id),
-        paperIds: pIds
-      };
-      setChatMessages(prev => [...prev, assistantMsg]);
-      setCitedPaperIds(new Set(pIds));
-    } catch (err) {
-      setChatMessages(prev => [...prev, {
-        id: `e-${Date.now()}`,
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : "Failed to reach server"}. Make sure the backend is running.`
-      }]);
+
+      if (!streamRes.ok || !streamRes.body) throw new Error("stream-unavailable");
+
+      setChatMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "" }]);
+      setChatLoading(false);
+
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let pIds: string[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") break;
+          try {
+            const parsed = JSON.parse(payload);
+            if (parsed.token) {
+              setChatMessages(prev =>
+                prev.map(m => m.id === assistantId ? { ...m, content: m.content + parsed.token } : m)
+              );
+            }
+            if (parsed.evidence) {
+              pIds = [...new Set((parsed.evidence || []).map((e: { paperId: string }) => e.paperId).filter(Boolean))] as string[];
+              setChatMessages(prev =>
+                prev.map(m => m.id === assistantId ? { ...m, paperIds: pIds, evidenceIds: parsed.evidence.map((e: { id: string }) => e.id) } : m)
+              );
+              setCitedPaperIds(new Set(pIds));
+            }
+          } catch {}
+        }
+      }
+    } catch {
+      try {
+        const res = await fetch(`${API_BASE}/api/workspaces/${workspace.id}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg })
+        });
+        if (!res.ok) throw new Error(`API ${res.status}`);
+        const data = await res.json();
+        const pIds: string[] = [...new Set((data.evidence || []).map((e: { paperId: string }) => e.paperId).filter(Boolean))] as string[];
+        const assistantMsg: ChatMessage = {
+          id: assistantId,
+          role: "assistant",
+          content: data.answer || "No response received.",
+          evidenceIds: data.evidence?.map((e: { id: string }) => e.id),
+          paperIds: pIds
+        };
+        setChatMessages(prev => {
+          const without = prev.filter(m => m.id !== assistantId);
+          return [...without, assistantMsg];
+        });
+        setCitedPaperIds(new Set(pIds));
+      } catch (err) {
+        setChatMessages(prev => {
+          const without = prev.filter(m => m.id !== assistantId);
+          return [...without, {
+            id: assistantId,
+            role: "assistant" as const,
+            content: `Error: ${err instanceof Error ? err.message : "Failed to reach server"}. Make sure the backend is running.`
+          }];
+        });
+      }
     } finally {
       setChatLoading(false);
     }
   }, [chatLoading, workspace?.id]);
 
   const suggestions = useMemo(() => [
-    `What are the key findings in ${workspace.topic.split(" ").slice(0, 4).join(" ")}?`,
+    `What are the key findings in ${(workspace?.topic || topic).split(" ").slice(0, 4).join(" ")}?`,
     "What methods are most commonly used?",
     "Summarize the main research gaps",
     "What materials or datasets are studied?"
-  ], [workspace]);
+  ], [workspace, topic]);
 
   const nodeMap = useMemo(() => {
     const m = new Map<string, LayoutNode>();
@@ -438,14 +498,43 @@ function Process({
         <div className="nav-brand">N.E.R.D</div>
         <div className="nav-center">
           <div className="step-badge">WORKSPACE</div>
-          <div className="step-name">{workspace.topic.length > 50 ? workspace.topic.slice(0, 48) + "..." : workspace.topic}</div>
+          <div className="step-name">{(workspace?.topic || topic).length > 50 ? (workspace?.topic || topic).slice(0, 48) + "..." : (workspace?.topic || topic)}</div>
         </div>
         <div className="nav-status">
-          <span className="status-dot-round complete" />
-          <span className="status-text">{workspace.papers.length} papers / {workspace.entities.length} entities</span>
+          {wsLoading ? (
+            <span className="status-text">Building workspace...</span>
+          ) : workspace ? (
+            <>
+              <span className="status-dot-round complete" />
+              <span className="status-text">{workspace.papers.length} papers / {workspace.entities.length} entities</span>
+            </>
+          ) : null}
         </div>
       </nav>
 
+      {wsLoading && !workspace ? (
+        <div className="loading-skeleton">
+          <div className="skeleton-graph">
+            <svg viewBox="0 0 840 460" className="skeleton-svg">
+              <circle cx="420" cy="230" r="20" className="skeleton-pulse" />
+              <circle cx="320" cy="160" r="12" className="skeleton-pulse s2" />
+              <circle cx="520" cy="170" r="14" className="skeleton-pulse s3" />
+              <circle cx="350" cy="310" r="10" className="skeleton-pulse s4" />
+              <circle cx="500" cy="300" r="11" className="skeleton-pulse s5" />
+              <circle cx="260" cy="240" r="8" className="skeleton-pulse s6" />
+              <circle cx="580" cy="240" r="9" className="skeleton-pulse s7" />
+              <line x1="420" y1="230" x2="320" y2="160" className="skeleton-line" />
+              <line x1="420" y1="230" x2="520" y2="170" className="skeleton-line" />
+              <line x1="420" y1="230" x2="350" y2="310" className="skeleton-line" />
+              <line x1="420" y1="230" x2="500" y2="300" className="skeleton-line" />
+              <line x1="320" y1="160" x2="260" y2="240" className="skeleton-line" />
+              <line x1="520" y1="170" x2="580" y2="240" className="skeleton-line" />
+            </svg>
+            <div className="skeleton-text">Building knowledge graph...</div>
+            <div className="skeleton-subtext">Searching papers, extracting entities, linking facts</div>
+          </div>
+        </div>
+      ) : (
       <main className="process-content-main">
         <section className="graph-shell">
           <div className="panel-header graph-header">
@@ -529,14 +618,18 @@ function Process({
                     <circle r={node.r * 1.8} fill={color} opacity={0.06} />
                     <circle r={node.r} fill={color} />
                     {node.r > 8 && <circle r={2} fill="white" opacity={0.5} />}
-                    <text
-                      x={node.r + 6}
-                      y={4}
-                      textAnchor="start"
-                      className={isCited ? "cited-text" : ""}
-                    >
-                      {node.name.length > 24 ? `${node.name.slice(0, 22)}...` : node.name}
-                    </text>
+                    {node.type === "paper" ? (
+                      <title>{node.name}</title>
+                    ) : (
+                      <text
+                        x={node.r + 6}
+                        y={4}
+                        textAnchor="start"
+                        className={isCited ? "cited-text" : ""}
+                      >
+                        {node.name.length > 24 ? `${node.name.slice(0, 22)}...` : node.name}
+                      </text>
+                    )}
                   </g>
                 );
               })}
@@ -599,7 +692,7 @@ function Process({
             <span className="chat-header-title">
               <span className="header-deco">▣</span> Research Chat
             </span>
-            <span className="chat-header-meta">{workspace.id ? "LIVE" : "LOCAL"}</span>
+            <span className="chat-header-meta">{workspace?.id ? "LIVE" : "LOCAL"}</span>
           </div>
 
           {chatMessages.length === 0 && !chatLoading ? (
@@ -607,7 +700,7 @@ function Process({
               <div className="chat-welcome-icon">◇</div>
               <div className="chat-welcome-title">Ask your research expert</div>
               <div className="chat-welcome-desc">
-                This workspace has {workspace.papers.length} papers and {workspace.entities.length} entities. Ask any question and get answers grounded in the literature.
+                This workspace has {workspace?.papers.length || 0} papers and {workspace?.entities.length || 0} entities. Ask any question and get answers grounded in the literature.
               </div>
             </div>
           ) : (
@@ -661,6 +754,7 @@ function Process({
           </div>
         </aside>
       </main>
+      )}
     </div>
   );
 }
@@ -670,10 +764,14 @@ export default function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingTopic, setPendingTopic] = useState("");
 
   async function start(topic: string) {
+    const t = topic.trim() || "AI for scientific discovery";
+    setPendingTopic(t);
     setLoading(true);
     setError(null);
+    setPhase("process");
 
     try {
       const response = await fetch(`${API_BASE}/api/workspaces`, {
@@ -685,20 +783,18 @@ export default function App() {
       const data = (await response.json()) as { workspace?: Workspace };
       if (!data.workspace) throw new Error("No workspace in response");
       setWorkspace(data.workspace);
-      setPhase("process");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       console.warn("API failed, using demo data:", msg);
       setError(`Backend unreachable (${msg}). Using demo data — chat will not work.`);
       setWorkspace(buildWorkspace(topic.trim() || "AI for scientific discovery", demoPapers));
-      setPhase("process");
     } finally {
       setLoading(false);
     }
   }
 
-  if (phase === "process" && workspace) {
-    return <Process workspace={workspace} />;
+  if (phase === "process") {
+    return <Process workspace={workspace} loading={loading} topic={pendingTopic} />;
   }
 
   return <Home onStart={start} loading={loading} error={error} />;

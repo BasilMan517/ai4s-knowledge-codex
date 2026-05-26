@@ -1797,3 +1797,50 @@ button {
     margin: 12px;
   }
 }
+
+/* Loading Skeleton */
+.loading-skeleton {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.skeleton-graph {
+  text-align: center;
+}
+.skeleton-svg {
+  width: min(600px, 80vw);
+  height: auto;
+}
+.skeleton-pulse {
+  fill: rgba(255, 255, 255, 0.08);
+  animation: skeletonPulse 1.8s ease-in-out infinite;
+}
+.skeleton-pulse.s2 { animation-delay: 0.15s; }
+.skeleton-pulse.s3 { animation-delay: 0.3s; }
+.skeleton-pulse.s4 { animation-delay: 0.45s; }
+.skeleton-pulse.s5 { animation-delay: 0.6s; }
+.skeleton-pulse.s6 { animation-delay: 0.75s; }
+.skeleton-pulse.s7 { animation-delay: 0.9s; }
+.skeleton-line {
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+  animation: skeletonPulse 1.8s ease-in-out infinite;
+}
+.skeleton-text {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 16px;
+  font-weight: 500;
+  margin-top: 24px;
+  letter-spacing: 0.5px;
+}
+.skeleton-subtext {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+  margin-top: 8px;
+}
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+}
