@@ -74,13 +74,13 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
 
   const topEntities = entityNodes
     .sort((a, b) => (b.count || 0) - (a.count || 0))
-    .slice(0, 12);
+    .slice(0, 20);
 
   const topEntityIds = new Set(topEntities.map(n => n.id));
   const topPapers = paperNodes
     .filter(p => (paperEdgeCount.get(p.id) || 0) > 0)
     .sort((a, b) => (paperEdgeCount.get(b.id) || 0) - (paperEdgeCount.get(a.id) || 0))
-    .slice(0, 6);
+    .slice(0, 8);
 
   const selectedNodes = [...topEntities, ...topPapers];
   const selectedIds = new Set(selectedNodes.map(n => n.id));
