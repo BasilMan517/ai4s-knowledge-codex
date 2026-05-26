@@ -68,12 +68,16 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
     }
   }
 
+  const topEntities = entityNodes
+    .sort((a, b) => (b.count || 0) - (a.count || 0))
+    .slice(0, 20);
+
   const topPapers = paperNodes
     .filter(p => (paperEdgeCount.get(p.id) || 0) > 0)
     .sort((a, b) => (paperEdgeCount.get(b.id) || 0) - (paperEdgeCount.get(a.id) || 0))
-    .slice(0, 12);
+    .slice(0, 8);
 
-  const selectedNodes = [...entityNodes, ...topPapers];
+  const selectedNodes = [...topEntities, ...topPapers];
   const selectedIds = new Set(selectedNodes.map(n => n.id));
 
   const nodes: LayoutNode[] = selectedNodes.map(n => ({
@@ -82,7 +86,7 @@ function selectGraphNodes(workspace: Workspace): { nodes: LayoutNode[]; edges: {
     type: n.type,
     x: 0,
     y: 0,
-    r: n.type === "paper" ? 3 : Math.min(16, 10 + (n.count || 0))
+    r: n.type === "paper" ? 3 : Math.min(13, 8 + (n.count || 0))
   }));
 
   const edges = allEdges
@@ -116,15 +120,15 @@ function runForceLayout(
     .map(e => ({ source: e.source, target: e.target, label: e.label }));
 
   const sim = forceSimulation<ForceNode>(simNodes)
-    .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(140).strength(0.3))
-    .force("charge", forceManyBody<ForceNode>().strength(-350))
+    .force("link", forceLink<ForceNode, ForceEdge>(simEdges).id(d => d.id).distance(220).strength(0.25))
+    .force("charge", forceManyBody<ForceNode>().strength(-800))
     .force("center", forceCenter(width / 2, height / 2))
-    .force("collide", forceCollide<ForceNode>().radius(d => d.r + 14))
+    .force("collide", forceCollide<ForceNode>().radius(d => d.r + 24))
     .stop();
 
-  for (let i = 0; i < 200; i++) sim.tick();
+  for (let i = 0; i < 300; i++) sim.tick();
 
-  const pad = 30;
+  const pad = 40;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const n of simNodes) {
     if (n.x! < minX) minX = n.x!;
@@ -318,7 +322,7 @@ function Process({
 
   const { nodes: forceNodes, edges: graphEdges } = useMemo(
     () => {
-      const result = runForceLayout(rawNodes, rawEdges, 840, 460, layoutPositionsRef.current);
+      const result = runForceLayout(rawNodes, rawEdges, 1200, 660, layoutPositionsRef.current);
       const posMap = new Map<string, { x: number; y: number }>();
       for (const n of result.nodes) posMap.set(n.id, { x: n.x, y: n.y });
       layoutPositionsRef.current = posMap;
@@ -576,7 +580,7 @@ function Process({
       {wsLoading && !workspace ? (
         <div className="loading-skeleton">
           <div className="skeleton-graph">
-            <svg viewBox="0 0 840 460" className="skeleton-svg">
+            <svg viewBox="0 0 1200 660" className="skeleton-svg">
               <circle cx="420" cy="230" r="20" className="skeleton-pulse" />
               <circle cx="320" cy="160" r="12" className="skeleton-pulse s2" />
               <circle cx="520" cy="170" r="14" className="skeleton-pulse s3" />
@@ -627,7 +631,7 @@ function Process({
               <>
             <svg
               className="graph-svg"
-              viewBox="0 0 840 460"
+              viewBox="0 0 1200 660"
               ref={svgRef}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
