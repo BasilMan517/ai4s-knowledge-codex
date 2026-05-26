@@ -13,7 +13,7 @@ type Phase = "home" | "process";
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8787";
+  (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" ? "" : "http://127.0.0.1:8787");
 
 const colors: Record<string, string> = {
   material: "#3498db",
