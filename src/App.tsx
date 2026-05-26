@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, type SimulationNodeDatum, type SimulationLinkDatum } from "d3-force";
+import { zoom as d3Zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
+import { select } from "d3-selection";
+import "d3-transition";
 import { demoPapers } from "./data/demoCorpus";
 import { buildWorkspace } from "./lib/search";
 import type { ChatMessage, GraphEdge, Workspace } from "./types";
@@ -307,8 +310,10 @@ function Process({
   const [visibleCount, setVisibleCount] = useState(0);
   const [dragId, setDragId] = useState<string | null>(null);
   const [nodePositions, setNodePositions] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const [zoomTransform, setZoomTransform] = useState<ZoomTransform>(zoomIdentity);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const layoutPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const seenNodeIdsRef = useRef<Set<string>>(new Set());
   const prevNodeCountRef = useRef(0);
@@ -539,15 +544,46 @@ function Process({
     const ctm = svg.getScreenCTM();
     if (!ctm) return;
     const svgPt = pt.matrixTransform(ctm.inverse());
+    const x = (svgPt.x - zoomTransform.x) / zoomTransform.k;
+    const y = (svgPt.y - zoomTransform.y) / zoomTransform.k;
     setNodePositions(prev => {
       const next = new Map(prev);
-      next.set(dragId, { x: svgPt.x, y: svgPt.y });
+      next.set(dragId, { x, y });
       return next;
     });
-  }, [dragId]);
+  }, [dragId, zoomTransform]);
 
   const handlePointerUp = useCallback(() => {
     setDragId(null);
+  }, []);
+
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svg = svgRef.current;
+    const zoomBehavior = d3Zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.3, 4])
+      .on("zoom", (event) => {
+        setZoomTransform(event.transform);
+      });
+    zoomRef.current = zoomBehavior;
+    select(svg).call(zoomBehavior);
+    select(svg).on("dblclick.zoom", null);
+    return () => { select(svg).on(".zoom", null); };
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.4);
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 0.7);
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    select(svgRef.current).transition().duration(400).call(zoomRef.current.transform, zoomIdentity);
   }, []);
 
   return (
@@ -637,6 +673,7 @@ function Process({
               onPointerUp={handlePointerUp}
               onPointerLeave={handlePointerUp}
             >
+              <g transform={`translate(${zoomTransform.x},${zoomTransform.y}) scale(${zoomTransform.k})`}>
               {graphEdges.map((edge, i) => {
                 const s = nodeMap.get(edge.source);
                 const t = nodeMap.get(edge.target);
@@ -698,7 +735,14 @@ function Process({
                   </g>
                 );
               })}
+              </g>
             </svg>
+
+            <div className="zoom-controls">
+              <button className="zoom-btn" onClick={handleZoomIn} title="Zoom in">+</button>
+              <button className="zoom-btn" onClick={handleZoomReset} title="Reset zoom">⟳</button>
+              <button className="zoom-btn" onClick={handleZoomOut} title="Zoom out">−</button>
+            </div>
 
             {selected && (
               <div className="detail-panel">
